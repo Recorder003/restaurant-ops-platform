@@ -19,3 +19,4 @@ REST API Server
         |
         v
 PostgreSQL Database
+```

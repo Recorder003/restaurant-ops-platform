@@ -110,6 +110,7 @@ A common beginner structure separates files only by file type:
 components/
 pages/
 services/
+```
 
 This can become hard to maintain as the app grows.
 

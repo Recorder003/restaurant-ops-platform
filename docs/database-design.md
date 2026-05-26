@@ -43,6 +43,7 @@ password_hash
 role
 created_at
 updated_at
+```
 
 Rules:
 

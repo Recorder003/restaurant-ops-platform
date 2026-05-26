@@ -10,6 +10,7 @@ The system has three primary roles:
 customer
 staff
 admin
+```
 
 2. Authentication vs Authorization
 
