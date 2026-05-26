@@ -126,6 +126,7 @@ REST API Server
  |
  v
 PostgreSQL Database
+```
 
 ## Key Engineering Focus Areas
 
