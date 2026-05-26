@@ -1,34 +1,45 @@
 # Restaurant Operations & Order Management Platform
 
-A full-stack restaurant operations platform designed to support dine-in ordering, kitchen workflows, staff permissions, menu administration, and order lifecycle management.
+A full-stack restaurant operations platform designed to support customer ordering, staff order management, menu administration, role-based access control, and order lifecycle tracking.
 
-This project is not intended to be a simple CRUD demo. The goal is to design and build a realistic web application that demonstrates end-to-end product thinking, frontend architecture, API design, database modeling, authentication, authorization, deployment, and engineering trade-offs.
+This project is not intended to be a simple CRUD demo. The goal is to build a realistic web application that demonstrates end-to-end product thinking, frontend architecture, API design, database modeling, authentication, authorization, deployment awareness, and engineering trade-offs.
 
 ## Project Status
 
 Currently in the planning and system design phase.
 
-The initial goal is to define the product requirements, architecture, data model, API boundaries, and major engineering decisions before implementation begins.
+Initial documentation includes:
+
+- Product requirements
+- System architecture
+- Database design
+- API design
+- Authentication and role-based access control
+- Engineering decisions and trade-offs
 
 ## Why This Project
 
-Many portfolio projects focus mainly on building pages and basic CRUD operations. In real-world software engineering, however, developers need to understand how different parts of a system fit together:
+Many beginner full-stack projects focus mainly on building pages and basic CRUD features. Real-world software engineering requires more than that.
 
-- How users interact with the product
-- How frontend state maps to backend data
-- How APIs enforce business rules
-- How databases model real-world relationships
-- How authentication and authorization protect workflows
-- How deployment, configuration, and error handling affect reliability
-- How engineering decisions involve trade-offs
+A production-style web application needs to consider:
 
-This project is designed to show that understanding.
+- User roles and permissions
+- API boundaries
+- Database consistency
+- Error handling
+- Deployment configuration
+- Security
+- Performance
+- Maintainability
+- Business rules
+
+This project is designed to demonstrate those skills through a realistic restaurant operations use case.
 
 ## Problem Statement
 
-Small and mid-sized restaurants often need a lightweight system to manage customer orders, staff workflows, menu updates, and order status visibility. Many simple ordering systems focus only on customer checkout, but restaurant operations also require internal tools for staff and managers.
+Small and mid-sized restaurants need a lightweight system to manage customer orders, kitchen workflows, menu updates, and staff permissions.
 
-This platform aims to support both customer-facing and staff-facing workflows in one system.
+A simple ordering page is not enough. Restaurant operations also require internal tools for staff and managers, such as order queues, status updates, menu management, and access control.
 
 ## Target Users
 
@@ -38,38 +49,36 @@ Customers can browse the menu, place orders, and track order status.
 
 ### Staff
 
-Restaurant staff can view incoming orders, accept orders, update preparation status, and complete orders.
+Staff can view incoming orders, accept orders, update preparation status, and complete orders.
 
-### Manager / Admin
+### Admin
 
-Managers can manage menu items, staff permissions, restaurant settings, and view operational data.
+Admins can manage menu items, staff roles, restaurant settings, and view order history.
 
-## Core Features
+## Planned Features
 
-### Customer Workflow
+### Customer Features
 
-- Browse available menu items
-- Filter menu items by category or availability
+- Browse menu items
 - Add items to cart
-- Place dine-in or pickup orders
-- View current order status
-- Receive real-time order updates
+- Place orders
+- View order status
+- Cancel pending orders when allowed
 
-### Staff Workflow
+### Staff Features
 
 - View incoming orders
 - Accept or reject orders
 - Update order status
 - Manage kitchen queue
-- Handle cancellations based on business rules
 
-### Admin Workflow
+### Admin Features
 
-- Create, update, and disable menu items
-- Manage item price, category, and availability
+- Create and update menu items
+- Disable unavailable items
 - Manage staff roles
 - View order history
-- View basic sales and operational metrics
+- View basic operational metrics
 
 ## Planned Tech Stack
 
@@ -89,7 +98,7 @@ Managers can manage menu items, staff permissions, restaurant settings, and view
 - Express.js or NestJS
 - TypeScript
 - REST API
-- JWT-based authentication
+- JWT authentication
 - Role-based authorization
 
 ### Database
@@ -97,60 +106,58 @@ Managers can manage menu items, staff permissions, restaurant settings, and view
 - PostgreSQL
 - Prisma or Drizzle ORM
 
-### Infrastructure
+### Deployment
 
-- GitHub
-- Vercel or Netlify for frontend deployment
-- Render, Railway, or AWS for backend deployment
+- Vercel or Netlify for frontend
+- Render, Railway, or AWS for backend
 - Managed PostgreSQL database
 - GitHub Actions for basic CI checks
-
-## System Goals
-
-The main goal is to build a maintainable, secure, and realistic full-stack application.
-
-Key engineering goals:
-
-- Clear separation between customer, staff, and admin workflows
-- Consistent API design
-- Strong backend validation
-- Role-based access control enforced on both frontend and backend
-- Relational database schema with meaningful constraints
-- Order lifecycle rules handled by backend business logic
-- Real-time or near-real-time order status updates
-- Deployment-ready environment configuration
-- Clear project documentation
-
-## Non-Goals
-
-The first version will not attempt to support every restaurant business case.
-
-The project will not initially include:
-
-- Multi-location enterprise restaurant support
-- Complex tax calculation
-- Real payment processing in production
-- Delivery driver logistics
-- Inventory forecasting
-- Advanced analytics
-- Native mobile applications
-
-These may be considered future improvements.
 
 ## High-Level Architecture
 
 ```txt
-Customer / Staff / Admin
-        |
-        v
+User
+ |
+ v
 React Frontend
-        |
-        v
+ |
+ v
 REST API Server
-        |
-        v
+ |
+ v
 PostgreSQL Database
-        |
-        v
-External Services
-(Auth, Payment Sandbox, Deployment, Logging)
+
+## Key Engineering Focus Areas
+
+- Designing a realistic full-stack architecture
+- Modeling relational data correctly
+- Enforcing order status rules on the backend
+- Separating customer, staff, and admin permissions
+- Handling API errors consistently
+- Planning for deployment and environment configuration
+- Documenting engineering trade-offs
+
+## Documentation
+
+Detailed planning documents are available in the docs folder:
+
+- product-requirements.md
+- architecture.md
+- database-design.md
+- api-design.md
+- auth-rbac.md
+- engineering-decisions.md
+
+## Future Improvements
+
+Potential future improvements include:
+
+- Real-time order updates using WebSocket or Server-Sent Events
+- Stripe test-mode payment integration
+- Dockerized local development
+- Admin analytics dashboard
+- Audit logs for staff/admin actions
+- End-to-end tests with Playwright
+- Multi-restaurant support
+
+Author
