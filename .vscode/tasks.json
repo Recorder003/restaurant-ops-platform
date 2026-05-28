@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install dependencies",
+      "type": "shell",
+      "command": "npm.cmd install",
+      "problemMatcher": []
+    },
+    {
+      "label": "Init PostgreSQL database",
+      "type": "shell",
+      "command": "npm.cmd run db:init",
+      "problemMatcher": []
+    },
+    {
+      "label": "Start PostgreSQL with Docker",
+      "type": "shell",
+      "command": "docker compose up -d postgres",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run full stack app",
+      "type": "shell",
+      "command": "npm.cmd run dev",
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "Typecheck",
+      "type": "shell",
+      "command": "npm.cmd run typecheck",
+      "problemMatcher": "$tsc"
+    },
+    {
+      "label": "Build",
+      "type": "shell",
+      "command": "npm.cmd run build",
+      "problemMatcher": "$tsc"
+    }
+  ]
+}

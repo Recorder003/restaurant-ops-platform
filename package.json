@@ -1,0 +1,19 @@
+{
+  "name": "restaurant-order-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack restaurant order management app with React, Node.js, TypeScript, and PostgreSQL.",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace server\" \"npm run dev --workspace client\"",
+    "build": "npm run build --workspace server && npm run build --workspace client",
+    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace client",
+    "db:init": "node scripts/init-db.mjs"
+  },
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
