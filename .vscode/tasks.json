@@ -27,6 +27,12 @@
       "problemMatcher": []
     },
     {
+      "label": "Stop project",
+      "type": "shell",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\stop-project.ps1",
+      "problemMatcher": []
+    },
+    {
       "label": "Run full stack app",
       "type": "shell",
       "command": "npm.cmd run dev",

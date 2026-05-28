@@ -3,6 +3,17 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 DROP TABLE IF EXISTS order_items;
 DROP TABLE IF EXISTS orders;
 DROP TABLE IF EXISTS menu_items;
+DROP TABLE IF EXISTS users;
+
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('staff', 'admin')),
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE menu_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -35,6 +46,7 @@ CREATE TABLE order_items (
 CREATE INDEX idx_orders_status ON orders(status);
 CREATE INDEX idx_orders_created_at ON orders(created_at DESC);
 CREATE INDEX idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX idx_users_email ON users(email);
 
 INSERT INTO menu_items (name, category, price_cents, is_available) VALUES
   ('Signature Beef Noodles', 'Entrees', 1380, TRUE),

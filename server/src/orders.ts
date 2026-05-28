@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { requireAuth, requireRole } from './authMiddleware.js';
 import { pool, query } from './db.js';
 import type { Order, OrderItem, OrderStatus } from './types.js';
 
 const router = Router();
+
+router.use(requireAuth, requireRole('staff', 'admin'));
 
 const createOrderSchema = z.object({
   tableNumber: z.string().trim().min(1).max(20),

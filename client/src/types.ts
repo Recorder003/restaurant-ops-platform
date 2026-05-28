@@ -1,4 +1,13 @@
 export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'served' | 'cancelled';
+export type UserRole = 'staff' | 'admin';
+
+export type User = {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  isActive: boolean;
+};
 
 export type MenuItem = {
   id: string;

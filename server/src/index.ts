@@ -2,6 +2,8 @@ import cors from 'cors';
 import express from 'express';
 import { config } from './config.js';
 import { pool } from './db.js';
+import adminRouter from './admin.js';
+import authRouter from './auth.js';
 import menuItemsRouter from './menuItems.js';
 import ordersRouter from './orders.js';
 
@@ -14,6 +16,8 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'restaurant-order-manager' });
 });
 
+app.use('/api/auth', authRouter);
+app.use('/api/admin', adminRouter);
 app.use('/api/menu-items', menuItemsRouter);
 app.use('/api/orders', ordersRouter);
 

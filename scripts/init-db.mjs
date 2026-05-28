@@ -1,9 +1,12 @@
 import dotenv from 'dotenv';
 import fs from 'node:fs/promises';
+import { randomBytes, scrypt } from 'node:crypto';
+import { promisify } from 'node:util';
 import pg from 'pg';
 
 dotenv.config();
 
+const scryptAsync = promisify(scrypt);
 const databaseUrl = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/restaurant_orders';
 const targetUrl = new URL(databaseUrl);
 const databaseName = decodeURIComponent(targetUrl.pathname.replace(/^\//, ''));
@@ -55,9 +58,46 @@ async function runSchema(connectionString) {
 
   try {
     await client.query(schema);
+    await seedUsers(client);
   } finally {
     await client.end();
   }
+}
+
+async function seedUsers(client) {
+  const users = [
+    {
+      name: 'Admin User',
+      email: 'admin@example.com',
+      password: 'Admin123!',
+      role: 'admin'
+    },
+    {
+      name: 'Staff User',
+      email: 'staff@example.com',
+      password: 'Staff123!',
+      role: 'staff'
+    }
+  ];
+
+  for (const user of users) {
+    await client.query(
+      `
+        INSERT INTO users (name, email, password_hash, role)
+        VALUES ($1, $2, $3, $4)
+      `,
+      [user.name, user.email, await hashPassword(user.password), user.role]
+    );
+  }
+
+  console.log('Seeded default users: admin@example.com / Admin123!, staff@example.com / Staff123!');
+}
+
+async function hashPassword(password) {
+  const salt = randomBytes(16).toString('hex');
+  const derivedKey = await scryptAsync(password, salt, 64);
+
+  return `scrypt:${salt}:${derivedKey.toString('hex')}`;
 }
 
 function quoteIdentifier(value) {
