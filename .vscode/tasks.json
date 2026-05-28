@@ -16,7 +16,14 @@
     {
       "label": "Start PostgreSQL with Docker",
       "type": "shell",
-      "command": "docker compose up -d postgres",
+      "command": ".\\scripts\\start-postgres.cmd",
+      "problemMatcher": []
+    },
+    {
+      "label": "Start project",
+      "type": "shell",
+      "command": ".\\scripts\\start-project.cmd",
+      "isBackground": true,
       "problemMatcher": []
     },
     {
