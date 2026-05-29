@@ -1,5 +1,7 @@
 export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'served' | 'cancelled';
-export type UserRole = 'staff' | 'admin';
+export type OrderSource = 'in_person' | 'phone';
+export type FulfillmentType = 'dine_in' | 'to_go' | 'pickup' | 'delivery';
+export type UserRole = 'staff' | 'admin' | 'chef';
 
 export type User = {
   id: string;
@@ -27,7 +29,11 @@ export type OrderItem = {
 
 export type Order = {
   id: string;
-  tableNumber: string;
+  orderSource: OrderSource;
+  fulfillmentType: FulfillmentType;
+  tableNumber: string | null;
+  partySize: number | null;
+  phoneNumber: string | null;
   serverName: string;
   status: OrderStatus;
   notes: string | null;

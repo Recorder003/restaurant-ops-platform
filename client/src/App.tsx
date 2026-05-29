@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   clearStoredToken,
   createMenuItem,
@@ -13,10 +13,21 @@ import {
   login,
   storeToken,
   updateMenuItem,
+  updateOrder,
   updateStaffUser,
   updateOrderStatus
 } from './api';
-import type { DraftItem, MenuItem, Order, OrderStatus, User, UserRole } from './types';
+import type {
+  DraftItem,
+  FulfillmentType,
+  MenuItem,
+  Order,
+  OrderFilters,
+  OrderSource,
+  OrderStatus,
+  User,
+  UserRole
+} from './types';
 
 const statusLabels: Record<OrderStatus, string> = {
   pending: 'Pending',
@@ -33,6 +44,19 @@ const nextStatus: Partial<Record<OrderStatus, OrderStatus>> = {
 };
 
 const menuCategories = ['Entrees', 'Vegetables', 'Small Plates', 'Drinks', 'Desserts'];
+const orderSourceLabels: Record<OrderSource, string> = {
+  in_person: 'In-person',
+  phone: 'Phone'
+};
+const fulfillmentLabels: Record<FulfillmentType, string> = {
+  dine_in: 'Dine-in',
+  to_go: 'To-go',
+  pickup: 'Pickup',
+  delivery: 'Delivery'
+};
+type OrderFilterState = Omit<OrderFilters, 'status'> & {
+  status: OrderStatus | 'all';
+};
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -42,8 +66,13 @@ function App() {
   const [adminMenuItems, setAdminMenuItems] = useState<MenuItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [staffUsers, setStaffUsers] = useState<User[]>([]);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [selectedItems, setSelectedItems] = useState<Record<string, number>>({});
+  const [orderSource, setOrderSource] = useState<OrderSource>('in_person');
+  const [fulfillmentType, setFulfillmentType] = useState<FulfillmentType>('dine_in');
   const [tableNumber, setTableNumber] = useState('');
+  const [partySize, setPartySize] = useState('2');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [serverName, setServerName] = useState('');
   const [notes, setNotes] = useState('');
   const [newStaffName, setNewStaffName] = useState('');
@@ -54,16 +83,46 @@ function App() {
   const [newMenuCategory, setNewMenuCategory] = useState('Entrees');
   const [newMenuPrice, setNewMenuPrice] = useState('12.00');
   const [newMenuAvailable, setNewMenuAvailable] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'all'>('all');
+  const [orderFilters, setOrderFilters] = useState<OrderFilterState>({
+    status: 'all',
+    tableNumber: '',
+    serverName: '',
+    fromDate: '',
+    toDate: '',
+    page: 1,
+    limit: 8
+  });
+  const [orderPagination, setOrderPagination] = useState({
+    page: 1,
+    limit: 8,
+    total: 0,
+    totalPages: 0
+  });
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCreatingStaff, setIsCreatingStaff] = useState(false);
   const [isCreatingMenuItem, setIsCreatingMenuItem] = useState(false);
+  const refreshTimeoutRef = useRef<number | null>(null);
+  const orderFiltersRef = useRef(orderFilters);
+  const userRef = useRef<User | null>(user);
 
   useEffect(() => {
     loadSession();
+  }, []);
+
+  useEffect(() => {
+    orderFiltersRef.current = orderFilters;
+    userRef.current = user;
+  }, [orderFilters, user]);
+
+  useEffect(() => {
+    return () => {
+      if (refreshTimeoutRef.current !== null) {
+        window.clearTimeout(refreshTimeoutRef.current);
+      }
+    };
   }, []);
 
   async function loadSession() {
@@ -71,6 +130,7 @@ function App() {
       setIsLoading(true);
       const currentUser = await fetchCurrentUser();
       setUser(currentUser);
+      setServerName(currentUser.name);
       await loadData(currentUser);
       setError(null);
     } catch {
@@ -82,17 +142,18 @@ function App() {
     }
   }
 
-  async function loadData(currentUser = user) {
+  async function loadData(currentUser = user, filters = orderFilters) {
     try {
       setIsLoading(true);
       const [menu, orderList, staffList, adminMenu] = await Promise.all([
         fetchMenuItems(),
-        fetchOrders(),
+        fetchOrders(toOrderApiFilters(filters)),
         currentUser?.role === 'admin' ? fetchStaffUsers() : Promise.resolve([]),
         currentUser?.role === 'admin' ? fetchAdminMenuItems() : Promise.resolve([])
       ]);
       setMenuItems(menu);
-      setOrders(orderList);
+      setOrders(orderList.orders);
+      setOrderPagination(orderList.pagination);
       setStaffUsers(staffList);
       setAdminMenuItems(adminMenu);
       setError(null);
@@ -111,6 +172,12 @@ function App() {
       const session = await login({ email, password });
       storeToken(session.accessToken);
       setUser(session.user);
+      setServerName(session.user.name);
+      setOrderFilters((current) => ({
+        ...current,
+        status: session.user.role === 'chef' && !isKitchenStatus(current.status) ? 'all' : current.status,
+        page: 1
+      }));
       await loadData(session.user);
       setError(null);
     } catch (err) {
@@ -126,7 +193,13 @@ function App() {
     setOrders([]);
     setStaffUsers([]);
     setAdminMenuItems([]);
+    setEditingOrderId(null);
     setSelectedItems({});
+    setServerName('');
+    if (refreshTimeoutRef.current !== null) {
+      window.clearTimeout(refreshTimeoutRef.current);
+      refreshTimeoutRef.current = null;
+    }
     setError(null);
   }
 
@@ -147,9 +220,12 @@ function App() {
     }, 0);
   }, [draftItems, menuItems]);
 
-  const filteredOrders = statusFilter === 'all'
-    ? orders
-    : orders.filter((order) => order.status === statusFilter);
+  const filteredOrders = orders;
+
+  function handleOrderSourceChange(source: OrderSource) {
+    setOrderSource(source);
+    setFulfillmentType(source === 'in_person' ? 'dine_in' : 'pickup');
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -161,28 +237,132 @@ function App() {
 
     try {
       setIsSubmitting(true);
-      const order = await createOrder({ tableNumber, serverName, notes, items: draftItems });
-      setOrders((current) => [order, ...current]);
+      const payload = {
+        orderSource,
+        fulfillmentType,
+        tableNumber: orderSource === 'in_person' ? tableNumber : undefined,
+        partySize: orderSource === 'in_person' ? Number(partySize) : undefined,
+        phoneNumber: orderSource === 'phone' ? phoneNumber : undefined,
+        serverName,
+        notes,
+        items: draftItems
+      };
+
+      if (editingOrderId) {
+        await updateOrder(editingOrderId, payload);
+      } else {
+        await createOrder(payload);
+      }
+      setEditingOrderId(null);
       setTableNumber('');
-      setServerName('');
+      setPartySize('2');
+      setPhoneNumber('');
+      setServerName(user?.name ?? '');
       setNotes('');
       setSelectedItems({});
+      await loadData();
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create order');
+      setError(err instanceof Error ? err.message : 'Failed to save order');
     } finally {
       setIsSubmitting(false);
     }
   }
 
+  function handleEditOrder(order: Order) {
+    if (order.status !== 'pending') {
+      setError('Only pending orders can be edited');
+      return;
+    }
+
+    setEditingOrderId(order.id);
+    setOrderSource(order.orderSource);
+    setFulfillmentType(order.fulfillmentType);
+    setTableNumber(order.tableNumber ?? '');
+    setPartySize(order.partySize?.toString() ?? '2');
+    setPhoneNumber(order.phoneNumber ?? '');
+    setServerName(order.serverName);
+    setNotes(order.notes ?? '');
+    setSelectedItems(Object.fromEntries(order.items.map((item) => [item.menuItemId, item.quantity])));
+    setError(null);
+  }
+
+  function handleCancelEdit() {
+    setEditingOrderId(null);
+    setOrderSource('in_person');
+    setFulfillmentType('dine_in');
+    setTableNumber('');
+    setPartySize('2');
+    setPhoneNumber('');
+    setServerName(user?.name ?? '');
+    setNotes('');
+    setSelectedItems({});
+    setError(null);
+  }
+
   async function handleStatusChange(order: Order, status: OrderStatus) {
+    if (status === 'cancelled' && !window.confirm(`Cancel ${getOrderTitle(order)}? This action cannot be undone.`)) {
+      return;
+    }
+
     try {
       const updated = await updateOrderStatus(order.id, status);
-      setOrders((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setOrders((current) => {
+        if (orderFilters.status !== 'all' && updated.status !== orderFilters.status) {
+          return current.filter((item) => item.id !== updated.id);
+        }
+
+        return current.map((item) => (item.id === updated.id ? updated : item));
+      });
+      if (user?.role === 'chef' && updated.status === 'ready') {
+        scheduleOrderListRefresh();
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update order status');
     }
+  }
+
+  async function handleOrderFilterSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextFilters = {
+      ...orderFilters,
+      status: user?.role === 'chef' && !isKitchenStatus(orderFilters.status) ? 'all' : orderFilters.status,
+      page: 1
+    };
+    setOrderFilters(nextFilters);
+    await loadData(user, nextFilters);
+  }
+
+  async function handleOrderFilterReset() {
+    const nextFilters: OrderFilterState = {
+      status: 'all',
+      tableNumber: '',
+      serverName: '',
+      fromDate: '',
+      toDate: '',
+      page: 1,
+      limit: orderFilters.limit
+    };
+    setOrderFilters(nextFilters);
+    await loadData(user, nextFilters);
+  }
+
+  async function handlePageChange(page: number) {
+    const nextFilters = { ...orderFilters, page };
+    setOrderFilters(nextFilters);
+    await loadData(user, nextFilters);
+  }
+
+  function scheduleOrderListRefresh() {
+    if (refreshTimeoutRef.current !== null) {
+      return;
+    }
+
+    refreshTimeoutRef.current = window.setTimeout(() => {
+      refreshTimeoutRef.current = null;
+      loadData(userRef.current, orderFiltersRef.current);
+    }, 3000);
   }
 
   async function handleCreateStaff(event: FormEvent<HTMLFormElement>) {
@@ -340,6 +520,7 @@ function App() {
             <strong>Local demo accounts</strong>
             <span>Admin: admin@example.com / Admin123!</span>
             <span>Staff: staff@example.com / Staff123!</span>
+            <span>Chef: chef@example.com / Chef123!</span>
           </div>
         </section>
       </main>
@@ -367,17 +548,73 @@ function App() {
 
         {error && <div className="alert">{error}</div>}
 
-        <div className="layout">
+        <div className={user.role === 'chef' ? 'layout kitchen-layout' : 'layout'}>
+          {user.role !== 'chef' && (
           <form className="panel order-form" onSubmit={handleSubmit}>
             <div className="panel-heading">
-              <h2>New Order</h2>
+              <h2>{editingOrderId ? 'Edit Order' : 'New Order'}</h2>
               <strong>{formatMoney(draftTotal)}</strong>
             </div>
 
-            <label>
-              Table
-              <input value={tableNumber} onChange={(event) => setTableNumber(event.target.value)} required />
-            </label>
+            <div className="segmented-control" aria-label="Order source">
+              <button
+                className={orderSource === 'in_person' ? 'selected' : ''}
+                type="button"
+                onClick={() => handleOrderSourceChange('in_person')}
+              >
+                In-person
+              </button>
+              <button
+                className={orderSource === 'phone' ? 'selected' : ''}
+                type="button"
+                onClick={() => handleOrderSourceChange('phone')}
+              >
+                Phone
+              </button>
+            </div>
+
+            {orderSource === 'in_person' ? (
+              <>
+                <label>
+                  Table
+                  <input value={tableNumber} onChange={(event) => setTableNumber(event.target.value)} required />
+                </label>
+
+                <label>
+                  Party Size
+                  <input
+                    min="1"
+                    type="number"
+                    value={partySize}
+                    onChange={(event) => setPartySize(event.target.value)}
+                    required
+                  />
+                </label>
+
+                <label>
+                  Service
+                  <select value={fulfillmentType} onChange={(event) => setFulfillmentType(event.target.value as FulfillmentType)}>
+                    <option value="dine_in">Dine-in</option>
+                    <option value="to_go">To-go</option>
+                  </select>
+                </label>
+              </>
+            ) : (
+              <>
+                <label>
+                  Phone
+                  <input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} required />
+                </label>
+
+                <label>
+                  Service
+                  <select value={fulfillmentType} onChange={(event) => setFulfillmentType(event.target.value as FulfillmentType)}>
+                    <option value="pickup">Pickup</option>
+                    <option value="delivery">Delivery</option>
+                  </select>
+                </label>
+              </>
+            )}
 
             <label>
               Server
@@ -417,21 +654,80 @@ function App() {
               ))}
             </div>
 
-            <button className="primary-button" disabled={isSubmitting}>
-              {isSubmitting ? 'Submitting...' : 'Submit Order'}
-            </button>
+            <div className="form-actions">
+              <button className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Saving...' : editingOrderId ? 'Save Changes' : 'Submit Order'}
+              </button>
+              {editingOrderId && (
+                <button className="ghost-button" type="button" onClick={handleCancelEdit}>
+                  Cancel Edit
+                </button>
+              )}
+            </div>
           </form>
+          )}
 
           <section className="orders-panel">
             <div className="panel-heading">
-              <h2>Order Board</h2>
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as OrderStatus | 'all')}>
-                <option value="all">All Statuses</option>
-                {Object.entries(statusLabels).map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
-                ))}
-              </select>
+              <h2>{user.role === 'chef' ? 'Kitchen Board' : 'Order Board'}</h2>
+              <span>{orderPagination.total} matching orders</span>
             </div>
+
+            <form className="order-filters" onSubmit={handleOrderFilterSubmit}>
+              <div className="filter-fields">
+                <label>
+                  Status
+                  <select
+                    value={orderFilters.status}
+                    onChange={(event) => setOrderFilters((current) => ({
+                      ...current,
+                      status: event.target.value as OrderStatus | 'all'
+                    }))}
+                  >
+                    <option value="all">All Statuses</option>
+                    {getVisibleStatusOptions(user.role).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Table
+                  <input
+                    value={orderFilters.tableNumber}
+                    onChange={(event) => setOrderFilters((current) => ({ ...current, tableNumber: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  Server
+                  <input
+                    value={orderFilters.serverName}
+                    onChange={(event) => setOrderFilters((current) => ({ ...current, serverName: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  From
+                  <input
+                    type="date"
+                    value={orderFilters.fromDate}
+                    onChange={(event) => setOrderFilters((current) => ({ ...current, fromDate: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  To
+                  <input
+                    type="date"
+                    value={orderFilters.toDate}
+                    onChange={(event) => setOrderFilters((current) => ({ ...current, toDate: event.target.value }))}
+                  />
+                </label>
+              </div>
+              <div className="filter-actions">
+                <button className="primary-button">Apply</button>
+                <button className="ghost-button" type="button" onClick={handleOrderFilterReset}>
+                  Clear
+                </button>
+              </div>
+            </form>
 
             <div className="metrics">
               <Metric label="Orders Today" value={orders.length.toString()} />
@@ -449,7 +745,8 @@ function App() {
                   <article key={order.id} className="order-card">
                     <div className="order-card-header">
                       <div>
-                        <strong>Table {order.tableNumber}</strong>
+                        <strong>{getOrderTitle(order)}</strong>
+                        <span>{orderSourceLabels[order.orderSource]} / {fulfillmentLabels[order.fulfillmentType]}</span>
                         <span>{order.serverName}</span>
                       </div>
                       <span className={`status ${order.status}`}>{statusLabels[order.status]}</span>
@@ -469,12 +766,21 @@ function App() {
                     <div className="order-actions">
                       <strong>{formatMoney(order.totalCents)}</strong>
                       <div>
-                        {nextStatus[order.status] && (
-                          <button onClick={() => handleStatusChange(order, nextStatus[order.status]!)}>
-                            {statusLabels[nextStatus[order.status]!]}
+                        {canEditOrder(order.status, user.role) && (
+                          <button onClick={() => handleEditOrder(order)}>
+                            Edit
                           </button>
                         )}
-                        {order.status !== 'served' && order.status !== 'cancelled' && (
+                        {getAllowedNextStatus(order.status, user.role) && (
+                          <button onClick={() => handleStatusChange(order, getAllowedNextStatus(order.status, user.role)!)}>
+                            {user.role === 'chef' && order.status === 'pending'
+                              ? 'Start'
+                              : user.role === 'chef' && order.status === 'preparing'
+                                ? 'Mark Done'
+                                : statusLabels[getAllowedNextStatus(order.status, user.role)!]}
+                          </button>
+                        )}
+                        {canCancelOrder(order.status, user.role) && (
                           <button className="danger-button" onClick={() => handleStatusChange(order, 'cancelled')}>
                             Cancel
                           </button>
@@ -484,6 +790,26 @@ function App() {
                   </article>
                 ))
               )}
+            </div>
+
+            <div className="pagination">
+              <button
+                className="ghost-button"
+                disabled={orderPagination.page <= 1 || isLoading}
+                onClick={() => handlePageChange(orderPagination.page - 1)}
+              >
+                Previous
+              </button>
+              <span>
+                Page {orderPagination.totalPages === 0 ? 0 : orderPagination.page} of {orderPagination.totalPages}
+              </span>
+              <button
+                className="ghost-button"
+                disabled={orderPagination.page >= orderPagination.totalPages || isLoading}
+                onClick={() => handlePageChange(orderPagination.page + 1)}
+              >
+                Next
+              </button>
             </div>
           </section>
         </div>
@@ -620,6 +946,7 @@ function App() {
                 <select value={newStaffRole} onChange={(event) => setNewStaffRole(event.target.value as UserRole)}>
                   <option value="staff">Staff</option>
                   <option value="admin">Admin</option>
+                  <option value="chef">Chef</option>
                 </select>
               </label>
               <button className="primary-button" disabled={isCreatingStaff}>
@@ -640,6 +967,7 @@ function App() {
                   >
                     <option value="staff">Staff</option>
                     <option value="admin">Admin</option>
+                    <option value="chef">Chef</option>
                   </select>
                   <label className="toggle-label">
                     <input
@@ -688,6 +1016,72 @@ function dollarsToCents(value: string) {
 
 function compareMenuItems(left: MenuItem, right: MenuItem) {
   return left.category.localeCompare(right.category) || left.name.localeCompare(right.name);
+}
+
+function getOrderTitle(order: Order) {
+  if (order.orderSource === 'phone') {
+    return `Phone ${order.phoneNumber}`;
+  }
+
+  return `Table ${order.tableNumber} / ${order.partySize} guests`;
+}
+
+function getAllowedNextStatus(status: OrderStatus, role: UserRole) {
+  if (role === 'admin') {
+    return nextStatus[status];
+  }
+
+  if (role === 'chef') {
+    if (status === 'pending') {
+      return 'preparing';
+    }
+
+    if (status === 'preparing') {
+      return 'ready';
+    }
+  }
+
+  if (role === 'staff' && status === 'ready') {
+    return 'served';
+  }
+
+  return undefined;
+}
+
+function canCancelOrder(status: OrderStatus, role: UserRole) {
+  if (role === 'admin') {
+    return status !== 'served' && status !== 'cancelled';
+  }
+
+  return role === 'staff' && status === 'pending';
+}
+
+function canEditOrder(status: OrderStatus, role: UserRole) {
+  return status === 'pending' && (role === 'staff' || role === 'admin');
+}
+
+function getVisibleStatusOptions(role: UserRole) {
+  const entries = Object.entries(statusLabels) as Array<[OrderStatus, string]>;
+
+  return role === 'chef'
+    ? entries.filter(([status]) => isKitchenStatus(status))
+    : entries;
+}
+
+function isKitchenStatus(status: OrderStatus | 'all') {
+  return status === 'all' || status === 'pending' || status === 'preparing';
+}
+
+function toOrderApiFilters(filters: OrderFilterState): OrderFilters {
+  return {
+    page: filters.page,
+    limit: filters.limit,
+    ...(filters.status !== 'all' ? { status: filters.status } : {}),
+    ...(filters.tableNumber ? { tableNumber: filters.tableNumber } : {}),
+    ...(filters.serverName ? { serverName: filters.serverName } : {}),
+    ...(filters.fromDate ? { fromDate: filters.fromDate } : {}),
+    ...(filters.toDate ? { toDate: filters.toDate } : {})
+  };
 }
 
 export default App;

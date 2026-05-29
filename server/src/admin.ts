@@ -13,12 +13,12 @@ const createStaffSchema = z.object({
   name: z.string().trim().min(1).max(80),
   email: z.string().trim().email().max(255).transform((value) => value.toLowerCase()),
   password: z.string().min(8).max(200),
-  role: z.enum(['staff', 'admin']).default('staff')
+  role: z.enum(['staff', 'admin', 'chef']).default('staff')
 });
 
 const updateStaffSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
-  role: z.enum(['staff', 'admin']).optional(),
+  role: z.enum(['staff', 'admin', 'chef']).optional(),
   isActive: z.boolean().optional()
 });
 

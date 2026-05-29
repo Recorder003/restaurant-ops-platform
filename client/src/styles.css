@@ -149,6 +149,22 @@ h3 {
   grid-template-columns: minmax(320px, 420px) 1fr;
 }
 
+.kitchen-layout {
+  grid-template-columns: 1fr;
+}
+
+.kitchen-layout .orders-panel {
+  width: 100%;
+}
+
+.kitchen-layout .filter-fields {
+  grid-template-columns: 160px repeat(4, minmax(140px, 1fr));
+}
+
+.kitchen-layout .order-grid {
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+
 .panel,
 .orders-panel,
 .admin-panel {
@@ -173,6 +189,36 @@ h3 {
   align-self: start;
   display: grid;
   gap: 14px;
+}
+
+.form-actions {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr auto;
+}
+
+.segmented-control {
+  background: #f2eee7;
+  border: 1px solid #d7d1c8;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: repeat(2, 1fr);
+  padding: 4px;
+}
+
+.segmented-control button {
+  background: transparent;
+  border-radius: 6px;
+  color: #51606d;
+  font-weight: 800;
+  padding: 10px 12px;
+}
+
+.segmented-control button.selected {
+  background: #ffffff;
+  color: #2f4f4f;
+  box-shadow: 0 1px 4px rgba(31, 41, 51, 0.08);
 }
 
 label {
@@ -259,6 +305,49 @@ textarea {
 
 .orders-panel {
   min-width: 0;
+}
+
+.orders-panel .panel-heading span {
+  color: #6b7280;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.order-filters {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 18px;
+}
+
+.filter-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.filter-actions {
+  align-items: end;
+  display: flex;
+  gap: 10px;
+}
+
+.filter-actions button {
+  min-width: 88px;
+}
+
+.pagination {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.pagination span {
+  color: #51606d;
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 
 .admin-panel {
@@ -351,7 +440,7 @@ textarea {
 .order-grid {
   display: grid;
   gap: 14px;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
 }
 
 .order-card {
@@ -417,12 +506,22 @@ li {
 }
 
 .order-actions {
+  align-items: center;
   gap: 12px;
+  justify-content: space-between;
 }
 
 .order-actions div {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.order-actions button {
+  min-width: 96px;
+  white-space: nowrap;
 }
 
 .alert,
@@ -449,6 +548,10 @@ li {
     grid-template-columns: 1fr;
   }
 
+  .kitchen-layout .filter-fields {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+
   .metrics {
     align-items: stretch;
     flex-direction: column;
@@ -457,7 +560,27 @@ li {
   .staff-form,
   .staff-row,
   .menu-admin-form,
-  .menu-admin-row {
+  .menu-admin-row,
+  .order-filters {
     grid-template-columns: 1fr;
+  }
+
+  .filter-actions {
+    justify-content: flex-end;
+  }
+
+  .pagination {
+    justify-content: stretch;
+  }
+}
+
+@media (max-width: 520px) {
+  .order-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .order-actions div {
+    justify-content: flex-start;
   }
 }

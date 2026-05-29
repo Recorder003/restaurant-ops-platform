@@ -1,4 +1,14 @@
-import type { DraftItem, MenuItem, Order, OrderStatus, User } from './types';
+import type {
+  DraftItem,
+  FulfillmentType,
+  MenuItem,
+  Order,
+  OrderFilters,
+  OrderListResponse,
+  OrderSource,
+  OrderStatus,
+  User
+} from './types';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api';
 const TOKEN_STORAGE_KEY = 'restaurant_ops_token';
@@ -38,8 +48,32 @@ export async function fetchAdminMenuItems(): Promise<MenuItem[]> {
   });
 }
 
-export async function fetchOrders(): Promise<Order[]> {
-  return request('/orders', {
+export async function fetchOrders(filters: OrderFilters): Promise<OrderListResponse> {
+  const params = new URLSearchParams();
+  params.set('page', filters.page.toString());
+  params.set('limit', filters.limit.toString());
+
+  if (filters.status) {
+    params.set('status', filters.status);
+  }
+
+  if (filters.tableNumber) {
+    params.set('tableNumber', filters.tableNumber);
+  }
+
+  if (filters.serverName) {
+    params.set('serverName', filters.serverName);
+  }
+
+  if (filters.fromDate) {
+    params.set('fromDate', filters.fromDate);
+  }
+
+  if (filters.toDate) {
+    params.set('toDate', filters.toDate);
+  }
+
+  return request(`/orders?${params.toString()}`, {
     token: getStoredToken()
   });
 }
@@ -109,13 +143,34 @@ export async function updateMenuItem(id: string, input: Partial<{
 }
 
 export async function createOrder(input: {
-  tableNumber: string;
+  orderSource: OrderSource;
+  fulfillmentType: FulfillmentType;
+  tableNumber?: string;
+  partySize?: number;
+  phoneNumber?: string;
   serverName: string;
   notes?: string;
   items: DraftItem[];
 }): Promise<Order> {
   return request('/orders', {
     method: 'POST',
+    token: getStoredToken(),
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updateOrder(id: string, input: {
+  orderSource: OrderSource;
+  fulfillmentType: FulfillmentType;
+  tableNumber?: string;
+  partySize?: number;
+  phoneNumber?: string;
+  serverName: string;
+  notes?: string;
+  items: DraftItem[];
+}): Promise<Order> {
+  return request(`/orders/${id}`, {
+    method: 'PATCH',
     token: getStoredToken(),
     body: JSON.stringify(input)
   });

@@ -10,7 +10,7 @@ CREATE TABLE users (
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('staff', 'admin')),
+  role TEXT NOT NULL CHECK (role IN ('staff', 'admin', 'chef')),
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -26,7 +26,13 @@ CREATE TABLE menu_items (
 
 CREATE TABLE orders (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  table_number TEXT NOT NULL,
+  order_source TEXT NOT NULL DEFAULT 'in_person'
+    CHECK (order_source IN ('in_person', 'phone')),
+  fulfillment_type TEXT NOT NULL DEFAULT 'dine_in'
+    CHECK (fulfillment_type IN ('dine_in', 'to_go', 'pickup', 'delivery')),
+  table_number TEXT,
+  party_size INTEGER CHECK (party_size IS NULL OR party_size > 0),
+  phone_number TEXT,
   server_name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'preparing', 'ready', 'served', 'cancelled')),

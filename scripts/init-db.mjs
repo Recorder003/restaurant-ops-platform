@@ -67,16 +67,22 @@ async function runSchema(connectionString) {
 async function seedUsers(client) {
   const users = [
     {
-      name: 'Admin User',
+      name: 'Mitch',
       email: 'admin@example.com',
       password: 'Admin123!',
       role: 'admin'
     },
     {
-      name: 'Staff User',
+      name: 'Kent',
       email: 'staff@example.com',
       password: 'Staff123!',
       role: 'staff'
+    },
+    {
+      name: 'Sparky',
+      email: 'chef@example.com',
+      password: 'Chef123!',
+      role: 'chef'
     }
   ];
 
@@ -90,7 +96,7 @@ async function seedUsers(client) {
     );
   }
 
-  console.log('Seeded default users: admin@example.com / Admin123!, staff@example.com / Staff123!');
+  console.log('Seeded default users: admin@example.com / Admin123!, staff@example.com / Staff123!, chef@example.com / Chef123!');
 }
 
 async function hashPassword(password) {
