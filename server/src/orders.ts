@@ -3,9 +3,11 @@ import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { requireAuth, requireRole, type AuthenticatedRequest } from './authMiddleware.js';
 import { pool, query } from './db.js';
-import type { FulfillmentType, Order, OrderEvent, OrderEventType, OrderItem, OrderSource, OrderStatus, User } from './types.js';
+import type { FulfillmentType, Order, OrderEvent, OrderEventType, OrderItem, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, TableStatus, User } from './types.js';
 
 const router = Router();
+const EXTRA_CHAIRS_ALLOWED = 2;
+const TAX_RATE = 0.086;
 
 router.use(requireAuth);
 
@@ -33,18 +35,18 @@ const createOrderSchema = z.object({
       });
     }
 
-    if (!value.tableNumber) {
+    if (value.fulfillmentType === 'dine_in' && !value.tableNumber) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Table number is required for in-person orders',
+        message: 'Table number is required for dine-in orders',
         path: ['tableNumber']
       });
     }
 
-    if (!value.partySize) {
+    if (value.fulfillmentType === 'dine_in' && !value.partySize) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Party size is required for in-person orders',
+        message: 'Party size is required for dine-in orders',
         path: ['partySize']
       });
     }
@@ -73,6 +75,16 @@ const updateOrderSchema = createOrderSchema;
 
 const statusSchema = z.object({
   status: z.enum(['pending', 'preparing', 'ready', 'served', 'cancelled'])
+});
+
+const checkoutSchema = z.object({
+  paymentMethod: z.enum(['cash', 'card']),
+  subtotalCents: z.number().int().min(0),
+  taxCents: z.number().int().min(0),
+  tipCents: z.number().int().min(0),
+  totalCents: z.number().int().min(0)
+}).refine((value) => value.subtotalCents + value.taxCents + value.tipCents === value.totalCents, {
+  message: 'Payment total must equal subtotal, tax, and tip'
 });
 
 const listOrdersSchema = z.object({
@@ -163,6 +175,13 @@ router.get('/', requireRole('staff', 'admin', 'chef'), async (req, res, next) =>
         p.phone_number,
         p.server_name,
         p.status,
+        p.payment_status,
+        p.payment_method,
+        p.payment_subtotal_cents,
+        p.payment_tax_cents,
+        p.payment_tip_cents,
+        p.payment_total_cents,
+        p.paid_at,
         p.notes,
         p.created_at,
         p.updated_at,
@@ -183,7 +202,7 @@ router.get('/', requireRole('staff', 'admin', 'chef'), async (req, res, next) =>
       FROM paged_orders p
       LEFT JOIN order_items oi ON oi.order_id = p.id
       LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
-      GROUP BY p.id, p.order_source, p.fulfillment_type, p.table_number, p.party_size, p.phone_number, p.server_name, p.status, p.notes, p.created_at, p.updated_at, p.total_count
+      GROUP BY p.id, p.order_source, p.fulfillment_type, p.table_number, p.party_size, p.phone_number, p.server_name, p.status, p.payment_status, p.payment_method, p.payment_subtotal_cents, p.payment_tax_cents, p.payment_tip_cents, p.payment_total_cents, p.paid_at, p.notes, p.created_at, p.updated_at, p.total_count
       ORDER BY p.created_at DESC
     `, params);
 
@@ -218,6 +237,10 @@ router.post('/', requireRole('staff', 'admin'), async (req, res, next) => {
 
     await client.query('BEGIN');
 
+    if (parsed.data.fulfillmentType === 'dine_in' && parsed.data.tableNumber && parsed.data.partySize) {
+      await occupyTable(client, parsed.data.tableNumber, parsed.data.partySize);
+    }
+
     const orderResult = await client.query<{ id: string }>(
       `
         INSERT INTO orders (
@@ -235,8 +258,8 @@ router.post('/', requireRole('staff', 'admin'), async (req, res, next) => {
       [
         parsed.data.orderSource,
         parsed.data.fulfillmentType,
-        parsed.data.orderSource === 'in_person' ? parsed.data.tableNumber : null,
-        parsed.data.orderSource === 'in_person' ? parsed.data.partySize : null,
+        parsed.data.fulfillmentType === 'dine_in' ? parsed.data.tableNumber : null,
+        parsed.data.fulfillmentType === 'dine_in' ? parsed.data.partySize : null,
         parsed.data.orderSource === 'phone' ? parsed.data.phoneNumber : null,
         parsed.data.serverName,
         parsed.data.notes ?? null
@@ -304,8 +327,12 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
 
     await client.query('BEGIN');
 
-    const current = await client.query<{ status: OrderStatus }>(
-      'SELECT status FROM orders WHERE id = $1 FOR UPDATE',
+    const current = await client.query<{
+      status: OrderStatus;
+      fulfillment_type: FulfillmentType;
+      table_number: string | null;
+    }>(
+      'SELECT status, fulfillment_type, table_number FROM orders WHERE id = $1 FOR UPDATE',
       [orderId]
     );
 
@@ -319,6 +346,21 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
       await client.query('ROLLBACK');
       res.status(409).json({ message: 'Only pending orders can be edited' });
       return;
+    }
+
+    const currentOrder = current.rows[0];
+    const nextTableNumber = parsed.data.fulfillmentType === 'dine_in' ? parsed.data.tableNumber ?? null : null;
+
+    if (currentOrder.fulfillment_type === 'dine_in' && currentOrder.table_number && currentOrder.table_number !== nextTableNumber) {
+      await setTableStatus(client, currentOrder.table_number, 'available');
+    }
+
+    if (parsed.data.fulfillmentType === 'dine_in' && nextTableNumber && parsed.data.partySize && nextTableNumber !== currentOrder.table_number) {
+      await occupyTable(client, nextTableNumber, parsed.data.partySize);
+    }
+
+    if (parsed.data.fulfillmentType === 'dine_in' && nextTableNumber && parsed.data.partySize && nextTableNumber === currentOrder.table_number) {
+      await validateTableCapacity(client, nextTableNumber, parsed.data.partySize);
     }
 
     await client.query(
@@ -338,8 +380,8 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
       [
         parsed.data.orderSource,
         parsed.data.fulfillmentType,
-        parsed.data.orderSource === 'in_person' ? parsed.data.tableNumber : null,
-        parsed.data.orderSource === 'in_person' ? parsed.data.partySize : null,
+        parsed.data.fulfillmentType === 'dine_in' ? parsed.data.tableNumber : null,
+        parsed.data.fulfillmentType === 'dine_in' ? parsed.data.partySize : null,
         parsed.data.orderSource === 'phone' ? parsed.data.phoneNumber : null,
         parsed.data.serverName,
         parsed.data.notes ?? null,
@@ -401,6 +443,8 @@ router.get('/:id/events', requireRole('admin'), async (req, res, next) => {
           event_type,
           from_status,
           to_status,
+          payment_method,
+          payment_total_cents,
           actor_user_id,
           actor_name,
           actor_role,
@@ -432,7 +476,11 @@ router.patch('/:id/status', requireRole('staff', 'admin', 'chef'), async (req, r
     const orderId = String(req.params.id);
     await client.query('BEGIN');
 
-    const current = await client.query<{ status: OrderStatus }>('SELECT status FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
+    const current = await client.query<{
+      status: OrderStatus;
+      fulfillment_type: FulfillmentType;
+      table_number: string | null;
+    }>('SELECT status, fulfillment_type, table_number FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
 
     if (current.rowCount === 0) {
       await client.query('ROLLBACK');
@@ -461,6 +509,16 @@ router.patch('/:id/status', requireRole('staff', 'admin', 'chef'), async (req, r
       [nextStatus, orderId]
     );
 
+    if (current.rows[0].fulfillment_type === 'dine_in' && current.rows[0].table_number) {
+      if (nextStatus === 'served') {
+        await setTableStatus(client, current.rows[0].table_number, 'needs_cleaning');
+      }
+
+      if (nextStatus === 'cancelled') {
+        await setTableStatus(client, current.rows[0].table_number, 'available');
+      }
+    }
+
     if (currentStatus !== nextStatus) {
       await insertOrderEvent(client, {
         orderId,
@@ -470,6 +528,118 @@ router.patch('/:id/status', requireRole('staff', 'admin', 'chef'), async (req, r
         actor: currentUser
       });
     }
+
+    await client.query('COMMIT');
+
+    res.json(await getOrderById(orderId));
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post('/:id/checkout', requireRole('staff', 'admin'), async (req, res, next) => {
+  const parsed = checkoutSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({ message: 'Invalid checkout payload', issues: parsed.error.flatten() });
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    const orderId = String(req.params.id);
+    const currentUser = (req as unknown as AuthenticatedRequest).user;
+
+    await client.query('BEGIN');
+
+    const current = await client.query<{
+      status: OrderStatus;
+      payment_status: PaymentStatus;
+    }>(
+      `
+        SELECT
+          o.status,
+          o.payment_status
+        FROM orders o
+        WHERE o.id = $1
+        FOR UPDATE OF o
+      `,
+      [orderId]
+    );
+
+    if (current.rowCount === 0) {
+      await client.query('ROLLBACK');
+      res.status(404).json({ message: 'Order not found' });
+      return;
+    }
+
+    if (current.rows[0].status !== 'served') {
+      await client.query('ROLLBACK');
+      res.status(409).json({ message: 'Only served orders can be checked out' });
+      return;
+    }
+
+    if (current.rows[0].payment_status !== 'unpaid') {
+      await client.query('ROLLBACK');
+      res.status(409).json({ message: 'Order has already been paid' });
+      return;
+    }
+
+    const subtotal = await client.query<{ total_cents: number }>(
+      'SELECT COALESCE(SUM(quantity * price_cents), 0)::int AS total_cents FROM order_items WHERE order_id = $1',
+      [orderId]
+    );
+
+    const expectedSubtotalCents = subtotal.rows[0].total_cents;
+    const expectedTaxCents = Math.round(expectedSubtotalCents * TAX_RATE);
+
+    if (parsed.data.subtotalCents !== expectedSubtotalCents) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ message: 'Checkout subtotal does not match current order total' });
+      return;
+    }
+
+    if (parsed.data.taxCents !== expectedTaxCents) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ message: 'Checkout tax does not match configured tax rate' });
+      return;
+    }
+
+    await client.query(
+      `
+        UPDATE orders
+        SET
+          payment_status = 'paid',
+          payment_method = $1,
+          payment_subtotal_cents = $2,
+          payment_tax_cents = $3,
+          payment_tip_cents = $4,
+          payment_total_cents = $5,
+          paid_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $6
+      `,
+      [
+        parsed.data.paymentMethod,
+        parsed.data.subtotalCents,
+        parsed.data.taxCents,
+        parsed.data.tipCents,
+        parsed.data.totalCents,
+        orderId
+      ]
+    );
+
+    await insertOrderEvent(client, {
+      orderId,
+      eventType: 'payment_recorded',
+      paymentMethod: parsed.data.paymentMethod,
+      paymentTotalCents: parsed.data.totalCents,
+      actor: currentUser
+    });
 
     await client.query('COMMIT');
 
@@ -494,6 +664,13 @@ async function getOrderById(id: string) {
         o.phone_number,
         o.server_name,
         o.status,
+        o.payment_status,
+        o.payment_method,
+        o.payment_subtotal_cents,
+        o.payment_tax_cents,
+        o.payment_tip_cents,
+        o.payment_total_cents,
+        o.paid_at,
         o.notes,
         o.created_at,
         o.updated_at,
@@ -531,6 +708,13 @@ type OrderRow = {
   phone_number: string | null;
   server_name: string;
   status: OrderStatus;
+  payment_status: PaymentStatus;
+  payment_method: PaymentMethod | null;
+  payment_subtotal_cents: number | null;
+  payment_tax_cents: number | null;
+  payment_tip_cents: number | null;
+  payment_total_cents: number | null;
+  paid_at: Date | null;
   notes: string | null;
   total_cents: number;
   created_at: Date;
@@ -548,6 +732,8 @@ type OrderEventRow = {
   event_type: OrderEventType;
   from_status: OrderStatus | null;
   to_status: OrderStatus | null;
+  payment_method: PaymentMethod | null;
+  payment_total_cents: number | null;
   actor_user_id: string | null;
   actor_name: string;
   actor_role: User['role'];
@@ -564,6 +750,13 @@ function mapOrder(row: OrderRow): Order {
     phoneNumber: row.phone_number,
     serverName: row.server_name,
     status: row.status,
+    paymentStatus: row.payment_status,
+    paymentMethod: row.payment_method,
+    paymentSubtotalCents: row.payment_subtotal_cents,
+    paymentTaxCents: row.payment_tax_cents,
+    paymentTipCents: row.payment_tip_cents,
+    paymentTotalCents: row.payment_total_cents,
+    paidAt: row.paid_at?.toISOString() ?? null,
     notes: row.notes,
     totalCents: row.total_cents,
     createdAt: row.created_at.toISOString(),
@@ -579,6 +772,8 @@ function mapOrderEvent(row: OrderEventRow): OrderEvent {
     eventType: row.event_type,
     fromStatus: row.from_status,
     toStatus: row.to_status,
+    paymentMethod: row.payment_method,
+    paymentTotalCents: row.payment_total_cents,
     actorUserId: row.actor_user_id,
     actorName: row.actor_name,
     actorRole: row.actor_role,
@@ -593,6 +788,8 @@ async function insertOrderEvent(
     eventType: OrderEventType;
     fromStatus?: OrderStatus;
     toStatus?: OrderStatus;
+    paymentMethod?: PaymentMethod;
+    paymentTotalCents?: number;
     actor: User;
   }
 ) {
@@ -603,21 +800,72 @@ async function insertOrderEvent(
         event_type,
         from_status,
         to_status,
+        payment_method,
+        payment_total_cents,
         actor_user_id,
         actor_name,
         actor_role
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     `,
     [
       input.orderId,
       input.eventType,
       input.fromStatus ?? null,
       input.toStatus ?? null,
+      input.paymentMethod ?? null,
+      input.paymentTotalCents ?? null,
       input.actor.id,
       input.actor.name,
       input.actor.role
     ]
+  );
+}
+
+async function occupyTable(client: PoolClient, tableNumber: string, partySize: number) {
+  const tableResult = await client.query<{ status: TableStatus; capacity: number }>(
+    'SELECT status, capacity FROM restaurant_tables WHERE name = $1 FOR UPDATE',
+    [tableNumber]
+  );
+
+  if (tableResult.rowCount === 0) {
+    throw new OrderInputError(`Table ${tableNumber} does not exist.`);
+  }
+
+  validatePartySizeForTable(tableNumber, partySize, tableResult.rows[0].capacity);
+
+  if (tableResult.rows[0].status !== 'available') {
+    throw new OrderInputError(`Table ${tableNumber} is not available.`);
+  }
+
+  await setTableStatus(client, tableNumber, 'occupied');
+}
+
+async function validateTableCapacity(client: PoolClient, tableNumber: string, partySize: number) {
+  const tableResult = await client.query<{ capacity: number }>(
+    'SELECT capacity FROM restaurant_tables WHERE name = $1 FOR UPDATE',
+    [tableNumber]
+  );
+
+  if (tableResult.rowCount === 0) {
+    throw new OrderInputError(`Table ${tableNumber} does not exist.`);
+  }
+
+  validatePartySizeForTable(tableNumber, partySize, tableResult.rows[0].capacity);
+}
+
+function validatePartySizeForTable(tableNumber: string, partySize: number, capacity: number) {
+  const maxPartySize = capacity + EXTRA_CHAIRS_ALLOWED;
+
+  if (partySize > maxPartySize) {
+    throw new OrderInputError(`Table ${tableNumber} seats ${capacity}. Maximum party size is ${maxPartySize} with extra chairs.`);
+  }
+}
+
+async function setTableStatus(client: PoolClient, tableNumber: string, status: TableStatus) {
+  await client.query(
+    'UPDATE restaurant_tables SET status = $1, updated_at = NOW() WHERE name = $2',
+    [status, tableNumber]
   );
 }
 

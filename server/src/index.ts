@@ -6,6 +6,7 @@ import adminRouter from './admin.js';
 import authRouter from './auth.js';
 import menuItemsRouter from './menuItems.js';
 import ordersRouter from './orders.js';
+import tablesRouter from './tables.js';
 
 const app = express();
 
@@ -20,6 +21,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/menu-items', menuItemsRouter);
 app.use('/api/orders', ordersRouter);
+app.use('/api/tables', tablesRouter);
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);

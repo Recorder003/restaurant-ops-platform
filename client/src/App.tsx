@@ -1,23 +1,28 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   clearStoredToken,
+  checkoutOrder,
   createMenuItem,
   createOrder,
   createStaffUser,
+  createTable,
   deleteStaffUser,
+  deleteTable,
   fetchAdminMenuItems,
   fetchCurrentUser,
   fetchMenuItems,
   fetchOrderEvents,
   fetchOrders,
   fetchStaffUsers,
+  fetchTables,
   login,
   storeToken,
   updateMenuItem,
   updateMenuItemSoldOut,
   updateOrder,
   updateStaffUser,
-  updateOrderStatus
+  updateOrderStatus,
+  updateTable
 } from './api';
 import type {
   DraftItem,
@@ -28,6 +33,8 @@ import type {
   OrderFilters,
   OrderSource,
   OrderStatus,
+  PaymentMethod,
+  RestaurantTable,
   User,
   UserRole
 } from './types';
@@ -57,9 +64,19 @@ const fulfillmentLabels: Record<FulfillmentType, string> = {
   pickup: 'Pickup',
   delivery: 'Delivery'
 };
+const tableStatusLabels = {
+  available: 'Available',
+  occupied: 'Occupied',
+  needs_cleaning: 'Needs cleaning'
+};
+const tipPresetOptions = [10, 15, 20];
+const extraChairsAllowed = 2;
+const taxRate = 0.086;
+
 type OrderFilterState = Omit<OrderFilters, 'status'> & {
   status: OrderStatus | 'all';
 };
+type StaffOrderStep = 'service' | 'table' | 'party' | 'phone' | 'menu';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -67,10 +84,17 @@ function App() {
   const [password, setPassword] = useState('Admin123!');
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [adminMenuItems, setAdminMenuItems] = useState<MenuItem[]>([]);
+  const [restaurantTables, setRestaurantTables] = useState<RestaurantTable[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [staffUsers, setStaffUsers] = useState<User[]>([]);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [historyOrder, setHistoryOrder] = useState<Order | null>(null);
+  const [checkoutTarget, setCheckoutTarget] = useState<Order | null>(null);
+  const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
+  const [isTablePickerOpen, setIsTablePickerOpen] = useState(false);
+  const [checkoutPaymentMethod, setCheckoutPaymentMethod] = useState<PaymentMethod>('card');
+  const [checkoutTip, setCheckoutTip] = useState('0.00');
+  const [checkoutTipPreset, setCheckoutTipPreset] = useState<number | 'custom'>('custom');
   const [orderEvents, setOrderEvents] = useState<OrderEvent[]>([]);
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
   const [selectedItems, setSelectedItems] = useState<Record<string, number>>({});
@@ -81,6 +105,8 @@ function App() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [serverName, setServerName] = useState('');
   const [notes, setNotes] = useState('');
+  const [staffOrderStep, setStaffOrderStep] = useState<StaffOrderStep>('service');
+  const [selectedCategory, setSelectedCategory] = useState(menuCategories[0]);
   const [newStaffName, setNewStaffName] = useState('');
   const [newStaffEmail, setNewStaffEmail] = useState('test@example.com');
   const [newStaffPassword, setNewStaffPassword] = useState('');
@@ -89,6 +115,8 @@ function App() {
   const [newMenuCategory, setNewMenuCategory] = useState('Entrees');
   const [newMenuPrice, setNewMenuPrice] = useState('12.00');
   const [newMenuAvailable, setNewMenuAvailable] = useState(true);
+  const [newTableName, setNewTableName] = useState('T13');
+  const [newTableCapacity, setNewTableCapacity] = useState('4');
   const [orderFilters, setOrderFilters] = useState<OrderFilterState>({
     status: 'all',
     tableNumber: '',
@@ -110,6 +138,7 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCreatingStaff, setIsCreatingStaff] = useState(false);
   const [isCreatingMenuItem, setIsCreatingMenuItem] = useState(false);
+  const [isCreatingTable, setIsCreatingTable] = useState(false);
   const refreshTimeoutRef = useRef<number | null>(null);
   const orderFiltersRef = useRef(orderFilters);
   const userRef = useRef<User | null>(user);
@@ -151,23 +180,29 @@ function App() {
   async function loadData(currentUser = user, filters = orderFilters) {
     try {
       setIsLoading(true);
-      const [menu, orderList, staffList, adminMenu] = await Promise.all([
+      const [menu, orderList, staffList, adminMenu, tables] = await Promise.all([
         fetchMenuItems(),
         fetchOrders(toOrderApiFilters(filters)),
         currentUser?.role === 'admin' ? fetchStaffUsers() : Promise.resolve([]),
-        currentUser?.role === 'admin' || currentUser?.role === 'chef' ? fetchAdminMenuItems() : Promise.resolve([])
+        currentUser?.role === 'admin' || currentUser?.role === 'chef' ? fetchAdminMenuItems() : Promise.resolve([]),
+        currentUser ? fetchTables() : Promise.resolve([])
       ]);
       setMenuItems(menu);
       setOrders(orderList.orders);
       setOrderPagination(orderList.pagination);
       setStaffUsers(staffList);
       setAdminMenuItems(adminMenu);
+      setRestaurantTables(tables);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function refreshTables() {
+    setRestaurantTables(await fetchTables());
   }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
@@ -199,8 +234,11 @@ function App() {
     setOrders([]);
     setStaffUsers([]);
     setAdminMenuItems([]);
+    setRestaurantTables([]);
     setEditingOrderId(null);
     setHistoryOrder(null);
+    setCheckoutTarget(null);
+    setReceiptOrder(null);
     setOrderEvents([]);
     setSelectedItems({});
     setServerName('');
@@ -215,6 +253,12 @@ function App() {
     return Array.from(new Set(menuItems.map((item) => item.category)));
   }, [menuItems]);
 
+  useEffect(() => {
+    if (categories.length > 0 && !categories.includes(selectedCategory)) {
+      setSelectedCategory(categories[0]);
+    }
+  }, [categories, selectedCategory]);
+
   const draftItems: DraftItem[] = useMemo(() => {
     return Object.entries(selectedItems)
       .filter(([, quantity]) => quantity > 0)
@@ -227,12 +271,97 @@ function App() {
       return total + (menuItem?.priceCents ?? 0) * item.quantity;
     }, 0);
   }, [draftItems, menuItems]);
+  const checkoutTaxCents = checkoutTarget ? Math.round(checkoutTarget.totalCents * taxRate) : 0;
+  const checkoutTipCents = dollarsToCents(checkoutTip);
+  const checkoutTotalCents = (checkoutTarget?.totalCents ?? 0) + checkoutTaxCents + checkoutTipCents;
 
   const filteredOrders = orders;
+  const selectedTable = useMemo(() => {
+    return restaurantTables.find((table) => table.name === tableNumber);
+  }, [restaurantTables, tableNumber]);
+  const maxPartySize = selectedTable ? selectedTable.capacity + extraChairsAllowed : 99;
 
   function handleOrderSourceChange(source: OrderSource) {
     setOrderSource(source);
     setFulfillmentType(source === 'in_person' ? 'dine_in' : 'pickup');
+  }
+
+  function resetOrderDraft() {
+    setEditingOrderId(null);
+    setOrderSource('in_person');
+    setFulfillmentType('dine_in');
+    setTableNumber('');
+    setPartySize('2');
+    setPhoneNumber('');
+    setServerName(user?.name ?? '');
+    setNotes('');
+    setSelectedItems({});
+    setStaffOrderStep('service');
+  }
+
+  function startStaffOrder(source: OrderSource, fulfillment: FulfillmentType) {
+    setEditingOrderId(null);
+    setOrderSource(source);
+    setFulfillmentType(fulfillment);
+    setTableNumber('');
+    setPartySize('2');
+    setPhoneNumber('');
+    setServerName(user?.name ?? '');
+    setNotes('');
+    setSelectedItems({});
+    setStaffOrderStep(fulfillment === 'dine_in' ? 'table' : source === 'phone' ? 'phone' : 'menu');
+  }
+
+  function goToStaffPartyStep() {
+    if (!tableNumber.trim()) {
+      setError('Please choose a table');
+      return;
+    }
+
+    setPartySize((current) => Math.min(Number(current), maxPartySize).toString());
+    setError(null);
+    setStaffOrderStep('party');
+  }
+
+  function goToStaffMenuStep() {
+    if (fulfillmentType === 'dine_in' && Number(partySize) < 1) {
+      setError('Please enter the party size');
+      return;
+    }
+
+    if (fulfillmentType === 'dine_in' && Number(partySize) > maxPartySize) {
+      setError(`This table seats ${selectedTable?.capacity ?? maxPartySize}. Maximum party size is ${maxPartySize} with extra chairs.`);
+      return;
+    }
+
+    if (orderSource === 'phone' && !phoneNumber.trim()) {
+      setError('Please enter a phone number');
+      return;
+    }
+
+    setError(null);
+    setStaffOrderStep('menu');
+  }
+
+  function handleMenuQuantityChange(menuItemId: string, quantity: number) {
+    setSelectedItems((current) => {
+      const next = { ...current };
+
+      if (quantity > 0) {
+        next[menuItemId] = quantity;
+      } else {
+        delete next[menuItemId];
+      }
+
+      return next;
+    });
+  }
+
+  function handleTableSelect(table: RestaurantTable) {
+    const nextMaxPartySize = table.capacity + extraChairsAllowed;
+    setTableNumber(table.name);
+    setPartySize((current) => Math.min(Number(current), nextMaxPartySize).toString());
+    setIsTablePickerOpen(false);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -248,8 +377,8 @@ function App() {
       const payload = {
         orderSource,
         fulfillmentType,
-        tableNumber: orderSource === 'in_person' ? tableNumber : undefined,
-        partySize: orderSource === 'in_person' ? Number(partySize) : undefined,
+        tableNumber: fulfillmentType === 'dine_in' ? tableNumber : undefined,
+        partySize: fulfillmentType === 'dine_in' ? Number(partySize) : undefined,
         phoneNumber: orderSource === 'phone' ? phoneNumber : undefined,
         serverName,
         notes,
@@ -261,13 +390,7 @@ function App() {
       } else {
         await createOrder(payload);
       }
-      setEditingOrderId(null);
-      setTableNumber('');
-      setPartySize('2');
-      setPhoneNumber('');
-      setServerName(user?.name ?? '');
-      setNotes('');
-      setSelectedItems({});
+      resetOrderDraft();
       await loadData();
       setError(null);
     } catch (err) {
@@ -292,19 +415,12 @@ function App() {
     setServerName(order.serverName);
     setNotes(order.notes ?? '');
     setSelectedItems(Object.fromEntries(order.items.map((item) => [item.menuItemId, item.quantity])));
+    setStaffOrderStep('menu');
     setError(null);
   }
 
   function handleCancelEdit() {
-    setEditingOrderId(null);
-    setOrderSource('in_person');
-    setFulfillmentType('dine_in');
-    setTableNumber('');
-    setPartySize('2');
-    setPhoneNumber('');
-    setServerName(user?.name ?? '');
-    setNotes('');
-    setSelectedItems({});
+    resetOrderDraft();
     setError(null);
   }
 
@@ -325,6 +441,9 @@ function App() {
       if (user?.role === 'chef' && updated.status === 'ready') {
         scheduleOrderListRefresh();
       }
+      if (updated.fulfillmentType === 'dine_in' && (updated.status === 'served' || updated.status === 'cancelled')) {
+        await refreshTables();
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update order status');
@@ -341,6 +460,52 @@ function App() {
       setError(err instanceof Error ? err.message : 'Failed to load order history');
     } finally {
       setIsLoadingEvents(false);
+    }
+  }
+
+  function handleOpenCheckout(order: Order) {
+    setCheckoutTarget(order);
+    setCheckoutPaymentMethod('card');
+    setCheckoutTip('0.00');
+    setCheckoutTipPreset('custom');
+    setError(null);
+  }
+
+  function handlePrintReceipt() {
+    document.body.classList.add('printing-receipt');
+    window.print();
+    window.setTimeout(() => document.body.classList.remove('printing-receipt'), 0);
+  }
+
+  function handleTipPreset(percent: number) {
+    if (!checkoutTarget) {
+      return;
+    }
+
+    setCheckoutTip(centsToDollarsInput(Math.round(checkoutTarget.totalCents * (percent / 100))));
+    setCheckoutTipPreset(percent);
+  }
+
+  async function handleCheckoutSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!checkoutTarget) {
+      return;
+    }
+
+    try {
+      const updated = await checkoutOrder(checkoutTarget.id, {
+        paymentMethod: checkoutPaymentMethod,
+        subtotalCents: checkoutTarget.totalCents,
+        taxCents: checkoutTaxCents,
+        tipCents: checkoutTipCents,
+        totalCents: checkoutTotalCents
+      });
+      setOrders((current) => current.map((order) => (order.id === updated.id ? updated : order)));
+      setCheckoutTarget(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to checkout order');
     }
   }
 
@@ -529,6 +694,60 @@ function App() {
     }
   }
 
+  async function handleCreateTable(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      setIsCreatingTable(true);
+      const created = await createTable({
+        name: newTableName,
+        capacity: Number(newTableCapacity)
+      });
+      setRestaurantTables((current) => [...current, created].sort(compareTables));
+      setNewTableName(getNextTableName([...restaurantTables, created]));
+      setNewTableCapacity('4');
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create table');
+    } finally {
+      setIsCreatingTable(false);
+    }
+  }
+
+  async function handleTableUpdate(table: RestaurantTable, input: Partial<RestaurantTable>) {
+    try {
+      const updated = await updateTable(table.id, input);
+      setRestaurantTables((current) => current.map((item) => (item.id === updated.id ? updated : item)).sort(compareTables));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update table');
+    }
+  }
+
+  async function handleDeleteTable(table: RestaurantTable) {
+    if (!window.confirm(`Delete ${table.name}? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await deleteTable(table.id);
+      setRestaurantTables((current) => current.filter((item) => item.id !== table.id));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete table');
+    }
+  }
+
+  async function handleTableCleaned(table: RestaurantTable) {
+    try {
+      const updated = await updateTable(table.id, { status: 'available' });
+      setRestaurantTables((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update table');
+    }
+  }
+
   if (!user) {
     return (
       <main className="app-shell auth-shell">
@@ -624,123 +843,343 @@ function App() {
           </section>
         )}
 
-        <div className={user.role === 'chef' ? 'layout kitchen-layout' : 'layout'}>
+        <div className={user.role === 'chef' ? 'layout kitchen-layout' : user.role === 'staff' ? 'layout staff-layout' : 'layout'}>
           {user.role !== 'chef' && (
-          <form className="panel order-form" onSubmit={handleSubmit}>
-            <div className="panel-heading">
-              <h2>{editingOrderId ? 'Edit Order' : 'New Order'}</h2>
-              <strong>{formatMoney(draftTotal)}</strong>
-            </div>
-
-            <div className="segmented-control" aria-label="Order source">
-              <button
-                className={orderSource === 'in_person' ? 'selected' : ''}
-                type="button"
-                onClick={() => handleOrderSourceChange('in_person')}
-              >
-                In-person
-              </button>
-              <button
-                className={orderSource === 'phone' ? 'selected' : ''}
-                type="button"
-                onClick={() => handleOrderSourceChange('phone')}
-              >
-                Phone
-              </button>
-            </div>
-
-            {orderSource === 'in_person' ? (
-              <>
-                <label>
-                  Table
-                  <input value={tableNumber} onChange={(event) => setTableNumber(event.target.value)} required />
-                </label>
-
-                <label>
-                  Party Size
-                  <input
-                    min="1"
-                    type="number"
-                    value={partySize}
-                    onChange={(event) => setPartySize(event.target.value)}
-                    required
-                  />
-                </label>
-
-                <label>
-                  Service
-                  <select value={fulfillmentType} onChange={(event) => setFulfillmentType(event.target.value as FulfillmentType)}>
-                    <option value="dine_in">Dine-in</option>
-                    <option value="to_go">To-go</option>
-                  </select>
-                </label>
-              </>
-            ) : (
-              <>
-                <label>
-                  Phone
-                  <input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} required />
-                </label>
-
-                <label>
-                  Service
-                  <select value={fulfillmentType} onChange={(event) => setFulfillmentType(event.target.value as FulfillmentType)}>
-                    <option value="pickup">Pickup</option>
-                    <option value="delivery">Delivery</option>
-                  </select>
-                </label>
-              </>
-            )}
-
-            <label>
-              Server
-              <input value={serverName} onChange={(event) => setServerName(event.target.value)} required />
-            </label>
-
-            <label>
-              Notes
-              <textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} />
-            </label>
-
-            <div className="menu-list">
-              {categories.map((category) => (
-                <div key={category} className="menu-category">
-                  <h3>{category}</h3>
-                  {menuItems
-                    .filter((item) => item.category === category)
-                    .map((item) => (
-                      <div key={item.id} className="menu-row">
-                        <div>
-                          <strong>{item.name}</strong>
-                          <span>{formatMoney(item.priceCents)}</span>
-                        </div>
-                        <input
-                          aria-label={`${item.name} quantity`}
-                          min="0"
-                          type="number"
-                          value={selectedItems[item.id] ?? 0}
-                          onChange={(event) => {
-                            const quantity = Number(event.target.value);
-                            setSelectedItems((current) => ({ ...current, [item.id]: quantity }));
-                          }}
-                        />
-                      </div>
-                    ))}
+            user.role === 'staff' ? (
+              <form className="panel order-wizard" onSubmit={handleSubmit}>
+                <div className="panel-heading">
+                  <div>
+                    <h2>{editingOrderId ? 'Edit Order' : 'New Order'}</h2>
+                    <span className="wizard-context">{getOrderFlowLabel(orderSource, fulfillmentType, tableNumber, partySize, phoneNumber)}</span>
+                  </div>
+                  <strong>{formatMoney(draftTotal)}</strong>
                 </div>
-              ))}
-            </div>
 
-            <div className="form-actions">
-              <button className="primary-button" disabled={isSubmitting}>
-                {isSubmitting ? 'Saving...' : editingOrderId ? 'Save Changes' : 'Submit Order'}
-              </button>
-              {editingOrderId && (
-                <button className="ghost-button" type="button" onClick={handleCancelEdit}>
-                  Cancel Edit
-                </button>
-              )}
-            </div>
-          </form>
+                {staffOrderStep === 'service' && (
+                  <div className="wizard-step">
+                    <div className="wizard-title">
+                      <span>Step 1</span>
+                      <h3>Choose service type</h3>
+                    </div>
+                    <div className="service-choice-grid">
+                      <button type="button" onClick={() => startStaffOrder('in_person', 'dine_in')}>
+                        <strong>Dine-in</strong>
+                        <span>Table order</span>
+                      </button>
+                      <button type="button" onClick={() => startStaffOrder('in_person', 'to_go')}>
+                        <strong>To-go</strong>
+                        <span>Walk-in takeout</span>
+                      </button>
+                      <button type="button" onClick={() => startStaffOrder('phone', 'pickup')}>
+                        <strong>Phone pickup</strong>
+                        <span>Customer picks up</span>
+                      </button>
+                      <button type="button" onClick={() => startStaffOrder('phone', 'delivery')}>
+                        <strong>Phone delivery</strong>
+                        <span>Delivery order</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {staffOrderStep === 'table' && (
+                  <div className="wizard-step">
+                    <div className="wizard-title">
+                      <span>Step 2</span>
+                      <h3>Choose table</h3>
+                    </div>
+                    <div className="table-grid">
+                      {restaurantTables.map((table) => (
+                        <button
+                          key={table.id}
+                          className={`${tableNumber === table.name ? 'selected' : ''} ${table.status}`}
+                          disabled={table.status !== 'available' && tableNumber !== table.name}
+                          type="button"
+                          onClick={() => (table.status === 'available' || tableNumber === table.name) && handleTableSelect(table)}
+                        >
+                          <strong>{table.name}</strong>
+                          <span>{tableStatusLabels[table.status]}</span>
+                          <small>{table.capacity} seats</small>
+                        </button>
+                      ))}
+                    </div>
+                    {restaurantTables.some((table) => table.status === 'needs_cleaning') && (
+                      <div className="cleaning-list">
+                        {restaurantTables
+                          .filter((table) => table.status === 'needs_cleaning')
+                          .map((table) => (
+                            <button key={table.id} className="ghost-button" type="button" onClick={() => handleTableCleaned(table)}>
+                              {table.name} Cleaned
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                    <div className="wizard-nav">
+                      <button className="ghost-button" type="button" onClick={resetOrderDraft}>Back</button>
+                      <button className="primary-button" type="button" onClick={goToStaffPartyStep}>Next</button>
+                    </div>
+                  </div>
+                )}
+
+                {staffOrderStep === 'party' && (
+                  <div className="wizard-step">
+                    <div className="wizard-title">
+                      <span>Step 3</span>
+                      <h3>How many guests?</h3>
+                      {selectedTable && (
+                        <p className="wizard-hint">
+                          {selectedTable.name} seats {selectedTable.capacity}. Max {maxPartySize} with extra chairs.
+                        </p>
+                      )}
+                    </div>
+                    <div className="party-picker">
+                      <button
+                        type="button"
+                        onClick={() => setPartySize(Math.max(1, Number(partySize) - 1).toString())}
+                      >
+                        -
+                      </button>
+                      <strong>{partySize}</strong>
+                      <button
+                        disabled={Number(partySize) >= maxPartySize}
+                        type="button"
+                        onClick={() => setPartySize(Math.min(maxPartySize, Number(partySize) + 1).toString())}
+                      >
+                        +
+                      </button>
+                    </div>
+                    <div className="wizard-nav">
+                      <button className="ghost-button" type="button" onClick={() => setStaffOrderStep('table')}>Back</button>
+                      <button className="primary-button" type="button" onClick={goToStaffMenuStep}>Next</button>
+                    </div>
+                  </div>
+                )}
+
+                {staffOrderStep === 'phone' && (
+                  <div className="wizard-step">
+                    <div className="wizard-title">
+                      <span>Step 2</span>
+                      <h3>Enter phone number</h3>
+                    </div>
+                    <label>
+                      Phone
+                      <input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} required />
+                    </label>
+                    <div className="wizard-nav">
+                      <button className="ghost-button" type="button" onClick={resetOrderDraft}>Back</button>
+                      <button className="primary-button" type="button" onClick={goToStaffMenuStep}>Next</button>
+                    </div>
+                  </div>
+                )}
+
+                {staffOrderStep === 'menu' && (
+                  <div className="wizard-menu">
+                    <aside className="category-rail">
+                      {categories.map((category) => (
+                        <button
+                          key={category}
+                          className={selectedCategory === category ? 'selected' : ''}
+                          type="button"
+                          onClick={() => setSelectedCategory(category)}
+                        >
+                          {category}
+                        </button>
+                      ))}
+                    </aside>
+
+                    <div className="wizard-menu-items">
+                      {menuItems
+                        .filter((item) => item.category === selectedCategory)
+                        .map((item) => (
+                          <button
+                            key={item.id}
+                            className="menu-tile"
+                            type="button"
+                            onClick={() => handleMenuQuantityChange(item.id, (selectedItems[item.id] ?? 0) + 1)}
+                          >
+                            <strong>{item.name}</strong>
+                            <span>{formatMoney(item.priceCents)}</span>
+                            {(selectedItems[item.id] ?? 0) > 0 && <em>x{selectedItems[item.id]}</em>}
+                          </button>
+                        ))}
+                    </div>
+
+                    <aside className="order-summary">
+                      <h3>Order</h3>
+                      {draftItems.length === 0 ? (
+                        <p>No items selected</p>
+                      ) : (
+                        <ul>
+                          {draftItems.map((item) => {
+                            const menuItem = menuItems.find((candidate) => candidate.id === item.menuItemId);
+
+                            return (
+                              <li key={item.menuItemId}>
+                                <span>{menuItem?.name} x {item.quantity}</span>
+                                <div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMenuQuantityChange(item.menuItemId, item.quantity - 1)}
+                                  >
+                                    -
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMenuQuantityChange(item.menuItemId, item.quantity + 1)}
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                      <label>
+                        Notes
+                        <textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} />
+                      </label>
+                      <div className="wizard-nav">
+                        <button className="ghost-button" type="button" onClick={editingOrderId ? handleCancelEdit : resetOrderDraft}>
+                          Cancel
+                        </button>
+                        <button className="primary-button" disabled={isSubmitting || draftItems.length === 0}>
+                          {isSubmitting ? 'Saving...' : editingOrderId ? 'Save Changes' : 'Submit Order'}
+                        </button>
+                      </div>
+                    </aside>
+                  </div>
+                )}
+              </form>
+            ) : (
+              <form className="panel order-form" onSubmit={handleSubmit}>
+                <div className="panel-heading">
+                  <h2>{editingOrderId ? 'Edit Order' : 'New Order'}</h2>
+                  <strong>{formatMoney(draftTotal)}</strong>
+                </div>
+
+                <div className="segmented-control" aria-label="Order source">
+                  <button
+                    className={orderSource === 'in_person' ? 'selected' : ''}
+                    type="button"
+                    onClick={() => handleOrderSourceChange('in_person')}
+                  >
+                    In-person
+                  </button>
+                  <button
+                    className={orderSource === 'phone' ? 'selected' : ''}
+                    type="button"
+                    onClick={() => handleOrderSourceChange('phone')}
+                  >
+                    Phone
+                  </button>
+                </div>
+
+                {orderSource === 'in_person' ? (
+                  <>
+                    <label>
+                      Service
+                      <select value={fulfillmentType} onChange={(event) => setFulfillmentType(event.target.value as FulfillmentType)}>
+                        <option value="dine_in">Dine-in</option>
+                        <option value="to_go">To-go</option>
+                      </select>
+                    </label>
+
+                    {fulfillmentType === 'dine_in' && (
+                      <>
+                        <div className="admin-table-picker">
+                          <div className="field-heading">
+                            <strong>Table</strong>
+                            {selectedTable && (
+                              <span>
+                                Selected: {selectedTable.name} / {selectedTable.capacity} seats / max {maxPartySize} guests
+                              </span>
+                            )}
+                          </div>
+                          <button className="ghost-button" type="button" onClick={() => setIsTablePickerOpen(true)}>
+                            {selectedTable ? `Change ${selectedTable.name}` : 'Choose Table'}
+                          </button>
+                          <input className="hidden-input" value={tableNumber} required readOnly />
+                        </div>
+
+                        <label>
+                          Party Size
+                          <input
+                            max={maxPartySize}
+                            min="1"
+                            type="number"
+                            value={partySize}
+                            onChange={(event) => setPartySize(event.target.value)}
+                            required
+                          />
+                        </label>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <label>
+                      Phone
+                      <input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} required />
+                    </label>
+
+                    <label>
+                      Service
+                      <select value={fulfillmentType} onChange={(event) => setFulfillmentType(event.target.value as FulfillmentType)}>
+                        <option value="pickup">Pickup</option>
+                        <option value="delivery">Delivery</option>
+                      </select>
+                    </label>
+                  </>
+                )}
+
+                <label>
+                  Server
+                  <input value={serverName} onChange={(event) => setServerName(event.target.value)} required />
+                </label>
+
+                <label>
+                  Notes
+                  <textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} />
+                </label>
+
+                <div className="menu-list">
+                  {categories.map((category) => (
+                    <div key={category} className="menu-category">
+                      <h3>{category}</h3>
+                      {menuItems
+                        .filter((item) => item.category === category)
+                        .map((item) => (
+                          <div key={item.id} className="menu-row">
+                            <div>
+                              <strong>{item.name}</strong>
+                              <span>{formatMoney(item.priceCents)}</span>
+                            </div>
+                            <input
+                              aria-label={`${item.name} quantity`}
+                              min="0"
+                              type="number"
+                              value={selectedItems[item.id] ?? 0}
+                              onChange={(event) => handleMenuQuantityChange(item.id, Number(event.target.value))}
+                            />
+                          </div>
+                        ))}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="form-actions">
+                  <button className="primary-button" disabled={isSubmitting}>
+                    {isSubmitting ? 'Saving...' : editingOrderId ? 'Save Changes' : 'Submit Order'}
+                  </button>
+                  {editingOrderId && (
+                    <button className="ghost-button" type="button" onClick={handleCancelEdit}>
+                      Cancel Edit
+                    </button>
+                  )}
+                </div>
+              </form>
+            )
           )}
 
           <section className="orders-panel">
@@ -806,9 +1245,9 @@ function App() {
             </form>
 
             <div className="metrics">
-              <Metric label="Orders Today" value={orders.length.toString()} />
-              <Metric label="In Progress" value={orders.filter((order) => ['pending', 'preparing', 'ready'].includes(order.status)).length.toString()} />
-              <Metric label="Revenue" value={formatMoney(orders.filter((order) => order.status !== 'cancelled').reduce((sum, order) => sum + order.totalCents, 0))} />
+              <Metric label="Shown Orders" value={orders.length.toString()} />
+              <Metric label="Shown Active" value={orders.filter((order) => ['pending', 'preparing', 'ready'].includes(order.status)).length.toString()} />
+              <Metric label="Shown Paid" value={formatMoney(orders.filter((order) => order.paymentStatus === 'paid').reduce((sum, order) => sum + (order.paymentTotalCents ?? order.totalCents), 0))} />
             </div>
 
             <div className="order-grid">
@@ -825,7 +1264,10 @@ function App() {
                         <span>{orderSourceLabels[order.orderSource]} / {fulfillmentLabels[order.fulfillmentType]}</span>
                         <span>{order.serverName}</span>
                       </div>
-                      <span className={`status ${order.status}`}>{statusLabels[order.status]}</span>
+                      <div className="status-stack">
+                        <span className={`status ${order.status}`}>{statusLabels[order.status]}</span>
+                        <span className={`payment-status ${order.paymentStatus}`}>{order.paymentStatus}</span>
+                      </div>
                     </div>
 
                     <ul>
@@ -842,6 +1284,9 @@ function App() {
                     <div className="order-actions">
                       <strong>{formatMoney(order.totalCents)}</strong>
                       <div>
+                        <button onClick={() => setReceiptOrder(order)}>
+                          Receipt
+                        </button>
                         {user.role === 'admin' && (
                           <button onClick={() => handleViewHistory(order)}>
                             History
@@ -864,6 +1309,11 @@ function App() {
                         {canCancelOrder(order.status, user.role) && (
                           <button className="danger-button" onClick={() => handleStatusChange(order, 'cancelled')}>
                             Cancel
+                          </button>
+                        )}
+                        {canCheckoutOrder(order, user.role) && (
+                          <button className="primary-button" onClick={() => handleOpenCheckout(order)}>
+                            Checkout
                           </button>
                         )}
                       </div>
@@ -1002,6 +1452,79 @@ function App() {
         {user.role === 'admin' && (
           <section className="admin-panel">
             <div className="panel-heading">
+              <h2>Table Management</h2>
+              <span>{restaurantTables.length} tables</span>
+            </div>
+
+            <form className="table-admin-form" onSubmit={handleCreateTable}>
+              <label>
+                Table
+                <input value={newTableName} onChange={(event) => setNewTableName(event.target.value)} required />
+              </label>
+              <label>
+                Seats
+                <input
+                  min="1"
+                  type="number"
+                  value={newTableCapacity}
+                  onChange={(event) => setNewTableCapacity(event.target.value)}
+                  required
+                />
+              </label>
+              <button className="primary-button" disabled={isCreatingTable}>
+                {isCreatingTable ? 'Creating...' : 'Create Table'}
+              </button>
+            </form>
+
+            <div className="table-admin-list">
+              {restaurantTables.map((table) => (
+                <article key={table.id} className="table-admin-row">
+                  <input
+                    aria-label={`${table.name} name`}
+                    defaultValue={table.name}
+                    onBlur={(event) => {
+                      if (event.target.value !== table.name) {
+                        handleTableUpdate(table, { name: event.target.value });
+                      }
+                    }}
+                  />
+                  <input
+                    aria-label={`${table.name} capacity`}
+                    defaultValue={table.capacity}
+                    min="1"
+                    type="number"
+                    onBlur={(event) => {
+                      const capacity = Number(event.target.value);
+                      if (capacity !== table.capacity) {
+                        handleTableUpdate(table, { capacity });
+                      }
+                    }}
+                  />
+                  <select
+                    aria-label={`${table.name} status`}
+                    value={table.status}
+                    onChange={(event) => handleTableUpdate(table, { status: event.target.value as RestaurantTable['status'] })}
+                  >
+                    <option value="available">Available</option>
+                    <option value="occupied">Occupied</option>
+                    <option value="needs_cleaning">Needs cleaning</option>
+                  </select>
+                  <button
+                    className="danger-button subtle-button"
+                    disabled={table.status === 'occupied'}
+                    onClick={() => handleDeleteTable(table)}
+                  >
+                    Delete
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {user.role === 'admin' && (
+          <section className="admin-panel">
+            <div className="panel-heading">
               <h2>Staff Management</h2>
               <span>{staffUsers.length} users</span>
             </div>
@@ -1113,6 +1636,163 @@ function App() {
           </section>
         </div>
       )}
+
+      {isTablePickerOpen && (
+        <div className="modal-backdrop">
+          <section className="history-modal table-picker-modal" role="dialog" aria-modal="true" aria-label="Choose table">
+            <div className="panel-heading">
+              <div>
+                <h2>Choose Table</h2>
+                <span>{selectedTable ? `Selected: ${selectedTable.name}` : 'Select an available table'}</span>
+              </div>
+              <button className="ghost-button" onClick={() => setIsTablePickerOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            <div className="table-grid modal-table-grid">
+              {restaurantTables.map((table) => (
+                <button
+                  key={table.id}
+                  className={`${tableNumber === table.name ? 'selected' : ''} ${table.status}`}
+                  disabled={table.status !== 'available' && tableNumber !== table.name}
+                  type="button"
+                  onClick={() => (table.status === 'available' || tableNumber === table.name) && handleTableSelect(table)}
+                >
+                  <strong>{table.name}</strong>
+                  <span>{tableStatusLabels[table.status]}</span>
+                  <small>{table.capacity} seats</small>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {receiptOrder && (
+        <div className="modal-backdrop">
+          <section className="history-modal receipt-modal" role="dialog" aria-modal="true" aria-label="Receipt preview">
+            <div className="panel-heading no-print">
+              <div>
+                <h2>Receipt</h2>
+                <span>{getOrderTitle(receiptOrder)}</span>
+              </div>
+              <div className="modal-actions">
+                <button className="primary-button" onClick={handlePrintReceipt}>
+                  Print
+                </button>
+                <button className="ghost-button" onClick={() => setReceiptOrder(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <article className="receipt-print-area">
+              <div className="receipt-header">
+                <h2>Restaurant Ops</h2>
+                <span>Order Receipt</span>
+              </div>
+
+              <div className="receipt-meta">
+                <span>Order</span><strong>{receiptOrder.id.slice(0, 8).toUpperCase()}</strong>
+                <span>Type</span><strong>{orderSourceLabels[receiptOrder.orderSource]} / {fulfillmentLabels[receiptOrder.fulfillmentType]}</strong>
+                <span>{receiptOrder.orderSource === 'phone' ? 'Phone' : 'Table'}</span><strong>{receiptOrder.orderSource === 'phone' ? receiptOrder.phoneNumber : receiptOrder.tableNumber ?? '-'}</strong>
+                <span>Server</span><strong>{receiptOrder.serverName}</strong>
+                <span>Date</span><strong>{formatDateTime(receiptOrder.createdAt)}</strong>
+              </div>
+
+              <ul className="receipt-items">
+                {receiptOrder.items.map((item) => (
+                  <li key={item.id}>
+                    <span>{item.menuItemName} x {item.quantity}</span>
+                    <strong>{formatMoney(item.priceCents * item.quantity)}</strong>
+                  </li>
+                ))}
+              </ul>
+
+              {receiptOrder.notes && <p className="receipt-notes">{receiptOrder.notes}</p>}
+
+              <div className="receipt-totals">
+                <span>Subtotal</span><strong>{formatMoney(receiptOrder.paymentSubtotalCents ?? receiptOrder.totalCents)}</strong>
+                <span>Tax</span><strong>{formatMoney(receiptOrder.paymentTaxCents ?? 0)}</strong>
+                <span>Tip</span><strong>{formatMoney(receiptOrder.paymentTipCents ?? 0)}</strong>
+                <span>Total</span><strong>{formatMoney(receiptOrder.paymentTotalCents ?? receiptOrder.totalCents)}</strong>
+              </div>
+
+              <div className="receipt-payment">
+                <span className={`payment-status ${receiptOrder.paymentStatus}`}>{receiptOrder.paymentStatus}</span>
+                {receiptOrder.paymentMethod && <span>{receiptOrder.paymentMethod}</span>}
+                {receiptOrder.paidAt && <span>{formatDateTime(receiptOrder.paidAt)}</span>}
+              </div>
+            </article>
+          </section>
+        </div>
+      )}
+
+      {checkoutTarget && (
+        <div className="modal-backdrop">
+          <section className="history-modal checkout-modal" role="dialog" aria-modal="true" aria-label="Checkout order">
+            <div className="panel-heading">
+              <div>
+                <h2>Checkout</h2>
+                <span>{getOrderTitle(checkoutTarget)}</span>
+              </div>
+              <button className="ghost-button" onClick={() => setCheckoutTarget(null)}>
+                Close
+              </button>
+            </div>
+
+            <form className="checkout-form" onSubmit={handleCheckoutSubmit}>
+              <ul className="checkout-lines">
+                <li><span>Subtotal</span><strong>{formatMoney(checkoutTarget.totalCents)}</strong></li>
+                <li><span>Tax</span><strong>{formatMoney(checkoutTaxCents)}</strong></li>
+                <li>
+                  <div className="tip-picker">
+                    <span>Tip</span>
+                    <div className="tip-presets">
+                      {tipPresetOptions.map((percent) => (
+                        <button
+                          key={percent}
+                          className={checkoutTipPreset === percent ? 'selected' : ''}
+                          type="button"
+                          onClick={() => handleTipPreset(percent)}
+                        >
+                          {percent}%
+                        </button>
+                      ))}
+                    </div>
+                    <label>
+                      Custom
+                      <input
+                        min="0"
+                        step="0.01"
+                        type="number"
+                        value={checkoutTip}
+                        onChange={(event) => {
+                          setCheckoutTip(event.target.value);
+                          setCheckoutTipPreset('custom');
+                        }}
+                      />
+                    </label>
+                  </div>
+                  <strong>{formatMoney(checkoutTipCents)}</strong>
+                </li>
+                <li className="checkout-total"><span>Total</span><strong>{formatMoney(checkoutTotalCents)}</strong></li>
+              </ul>
+
+              <label>
+                Payment Method
+                <select value={checkoutPaymentMethod} onChange={(event) => setCheckoutPaymentMethod(event.target.value as PaymentMethod)}>
+                  <option value="card">Card</option>
+                  <option value="cash">Cash</option>
+                </select>
+              </label>
+
+              <button className="primary-button">Confirm Payment</button>
+            </form>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -1134,11 +1814,30 @@ function formatMoney(cents: number) {
 }
 
 function dollarsToCents(value: string) {
-  return Math.round(Number(value) * 100);
+  const amount = Number(value);
+  return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
+}
+
+function centsToDollarsInput(cents: number) {
+  return (cents / 100).toFixed(2);
 }
 
 function compareMenuItems(left: MenuItem, right: MenuItem) {
   return left.category.localeCompare(right.category) || left.name.localeCompare(right.name);
+}
+
+function compareTables(left: RestaurantTable, right: RestaurantTable) {
+  return getTableSortNumber(left.name) - getTableSortNumber(right.name) || left.name.localeCompare(right.name);
+}
+
+function getTableSortNumber(name: string) {
+  const match = name.match(/\d+/);
+  return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
+}
+
+function getNextTableName(tables: RestaurantTable[]) {
+  const highest = tables.reduce((max, table) => Math.max(max, getTableSortNumber(table.name)), 0);
+  return `T${highest + 1}`;
 }
 
 function getOrderTitle(order: Order) {
@@ -1146,7 +1845,29 @@ function getOrderTitle(order: Order) {
     return `Phone ${order.phoneNumber}`;
   }
 
+  if (order.fulfillmentType === 'to_go') {
+    return 'To-go order';
+  }
+
   return `Table ${order.tableNumber} / ${order.partySize} guests`;
+}
+
+function getOrderFlowLabel(
+  orderSource: OrderSource,
+  fulfillmentType: FulfillmentType,
+  tableNumber: string,
+  partySize: string,
+  phoneNumber: string
+) {
+  if (orderSource === 'phone') {
+    return `${fulfillmentLabels[fulfillmentType]}${phoneNumber ? ` / ${phoneNumber}` : ''}`;
+  }
+
+  if (fulfillmentType === 'to_go') {
+    return 'Walk-in / To-go';
+  }
+
+  return tableNumber ? `${tableNumber} / ${partySize} guests` : 'Dine-in';
 }
 
 function formatOrderEvent(event: OrderEvent) {
@@ -1156,6 +1877,10 @@ function formatOrderEvent(event: OrderEvent) {
 
   if (event.eventType === 'order_updated') {
     return 'Order updated';
+  }
+
+  if (event.eventType === 'payment_recorded') {
+    return `Payment recorded${event.paymentMethod ? ` / ${event.paymentMethod}` : ''}${event.paymentTotalCents ? ` / ${formatMoney(event.paymentTotalCents)}` : ''}`;
   }
 
   if (event.fromStatus && event.toStatus) {
@@ -1204,6 +1929,10 @@ function canCancelOrder(status: OrderStatus, role: UserRole) {
 
 function canEditOrder(status: OrderStatus, role: UserRole) {
   return status === 'pending' && (role === 'staff' || role === 'admin');
+}
+
+function canCheckoutOrder(order: Order, role: UserRole) {
+  return (role === 'staff' || role === 'admin') && order.status === 'served' && order.paymentStatus === 'unpaid';
 }
 
 function getVisibleStatusOptions(role: UserRole) {

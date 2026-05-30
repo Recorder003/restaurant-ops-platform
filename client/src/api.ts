@@ -8,6 +8,9 @@ import type {
   OrderListResponse,
   OrderSource,
   OrderStatus,
+  PaymentMethod,
+  RestaurantTable,
+  TableStatus,
   User
 } from './types';
 
@@ -75,6 +78,39 @@ export async function fetchOrders(filters: OrderFilters): Promise<OrderListRespo
   }
 
   return request(`/orders?${params.toString()}`, {
+    token: getStoredToken()
+  });
+}
+
+export async function fetchTables(): Promise<RestaurantTable[]> {
+  return request('/tables', {
+    token: getStoredToken()
+  });
+}
+
+export async function updateTable(id: string, input: Partial<{
+  name: string;
+  capacity: number;
+  status: TableStatus;
+}>): Promise<RestaurantTable> {
+  return request(`/tables/${id}`, {
+    method: 'PATCH',
+    token: getStoredToken(),
+    body: JSON.stringify(input)
+  });
+}
+
+export async function createTable(input: { name: string; capacity: number }): Promise<RestaurantTable> {
+  return request('/tables', {
+    method: 'POST',
+    token: getStoredToken(),
+    body: JSON.stringify(input)
+  });
+}
+
+export async function deleteTable(id: string): Promise<void> {
+  await request(`/tables/${id}`, {
+    method: 'DELETE',
     token: getStoredToken()
   });
 }
@@ -192,6 +228,20 @@ export async function updateOrderStatus(id: string, status: OrderStatus): Promis
     method: 'PATCH',
     token: getStoredToken(),
     body: JSON.stringify({ status })
+  });
+}
+
+export async function checkoutOrder(id: string, input: {
+  paymentMethod: PaymentMethod;
+  subtotalCents: number;
+  taxCents: number;
+  tipCents: number;
+  totalCents: number;
+}): Promise<Order> {
+  return request(`/orders/${id}/checkout`, {
+    method: 'POST',
+    token: getStoredToken(),
+    body: JSON.stringify(input)
   });
 }
 
