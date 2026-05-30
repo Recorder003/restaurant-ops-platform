@@ -1,5 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+DROP TABLE IF EXISTS order_events;
 DROP TABLE IF EXISTS order_items;
 DROP TABLE IF EXISTS orders;
 DROP TABLE IF EXISTS menu_items;
@@ -21,6 +22,7 @@ CREATE TABLE menu_items (
   category TEXT NOT NULL,
   price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
   is_available BOOLEAN NOT NULL DEFAULT TRUE,
+  is_sold_out BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -41,6 +43,18 @@ CREATE TABLE orders (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE order_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL CHECK (event_type IN ('order_created', 'order_updated', 'status_changed')),
+  from_status TEXT CHECK (from_status IS NULL OR from_status IN ('pending', 'preparing', 'ready', 'served', 'cancelled')),
+  to_status TEXT CHECK (to_status IS NULL OR to_status IN ('pending', 'preparing', 'ready', 'served', 'cancelled')),
+  actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  actor_name TEXT NOT NULL,
+  actor_role TEXT NOT NULL CHECK (actor_role IN ('staff', 'admin', 'chef')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE order_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -52,6 +66,7 @@ CREATE TABLE order_items (
 CREATE INDEX idx_orders_status ON orders(status);
 CREATE INDEX idx_orders_created_at ON orders(created_at DESC);
 CREATE INDEX idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX idx_order_events_order_id ON order_events(order_id);
 CREATE INDEX idx_users_email ON users(email);
 
 INSERT INTO menu_items (name, category, price_cents, is_available) VALUES

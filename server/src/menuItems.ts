@@ -11,17 +11,21 @@ const menuItemSchema = z.object({
   name: z.string().trim().min(1).max(120),
   category: z.enum(menuCategories),
   priceCents: z.number().int().min(0).max(100000),
-  isAvailable: z.boolean().default(true)
+  isAvailable: z.boolean().default(true),
+  isSoldOut: z.boolean().default(false)
 });
 
 const updateMenuItemSchema = menuItemSchema.partial();
+const soldOutSchema = z.object({
+  isSoldOut: z.boolean()
+});
 
 router.get('/', async (_req, res, next) => {
   try {
     const { rows } = await query<MenuItemRow>(`
-      SELECT id, name, category, price_cents, is_available
+      SELECT id, name, category, price_cents, is_available, is_sold_out
       FROM menu_items
-      WHERE is_available = TRUE
+      WHERE is_available = TRUE AND is_sold_out = FALSE
       ORDER BY category, name
     `);
 
@@ -31,10 +35,10 @@ router.get('/', async (_req, res, next) => {
   }
 });
 
-router.get('/admin', requireAuth, requireRole('admin'), async (_req, res, next) => {
+router.get('/admin', requireAuth, requireRole('admin', 'chef'), async (_req, res, next) => {
   try {
     const { rows } = await query<MenuItemRow>(`
-      SELECT id, name, category, price_cents, is_available
+      SELECT id, name, category, price_cents, is_available, is_sold_out
       FROM menu_items
       ORDER BY category, name
     `);
@@ -56,11 +60,11 @@ router.post('/', requireAuth, requireRole('admin'), async (req, res, next) => {
   try {
     const { rows } = await query<MenuItemRow>(
       `
-        INSERT INTO menu_items (name, category, price_cents, is_available)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, name, category, price_cents, is_available
+        INSERT INTO menu_items (name, category, price_cents, is_available, is_sold_out)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, name, category, price_cents, is_available, is_sold_out
       `,
-      [parsed.data.name, parsed.data.category, parsed.data.priceCents, parsed.data.isAvailable]
+      [parsed.data.name, parsed.data.category, parsed.data.priceCents, parsed.data.isAvailable, parsed.data.isSoldOut]
     );
 
     res.status(201).json(mapMenuItem(rows[0]));
@@ -90,17 +94,49 @@ router.patch('/:id', requireAuth, requireRole('admin'), async (req, res, next) =
           name = COALESCE($1, name),
           category = COALESCE($2, category),
           price_cents = COALESCE($3, price_cents),
-          is_available = COALESCE($4, is_available)
-        WHERE id = $5
-        RETURNING id, name, category, price_cents, is_available
+          is_available = COALESCE($4, is_available),
+          is_sold_out = COALESCE($5, is_sold_out)
+        WHERE id = $6
+        RETURNING id, name, category, price_cents, is_available, is_sold_out
       `,
       [
         parsed.data.name ?? null,
         parsed.data.category ?? null,
         parsed.data.priceCents ?? null,
         parsed.data.isAvailable ?? null,
+        parsed.data.isSoldOut ?? null,
         req.params.id
       ]
+    );
+
+    if (!rows[0]) {
+      res.status(404).json({ message: 'Menu item not found' });
+      return;
+    }
+
+    res.json(mapMenuItem(rows[0]));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/:id/sold-out', requireAuth, requireRole('admin', 'chef'), async (req, res, next) => {
+  const parsed = soldOutSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({ message: 'Invalid sold out payload' });
+    return;
+  }
+
+  try {
+    const { rows } = await query<MenuItemRow>(
+      `
+        UPDATE menu_items
+        SET is_sold_out = $1
+        WHERE id = $2
+        RETURNING id, name, category, price_cents, is_available, is_sold_out
+      `,
+      [parsed.data.isSoldOut, req.params.id]
     );
 
     if (!rows[0]) {
@@ -120,6 +156,7 @@ type MenuItemRow = {
   category: string;
   price_cents: number;
   is_available: boolean;
+  is_sold_out: boolean;
 };
 
 function mapMenuItem(row: MenuItemRow): MenuItem {
@@ -128,7 +165,8 @@ function mapMenuItem(row: MenuItemRow): MenuItem {
     name: row.name,
     category: row.category,
     priceCents: row.price_cents,
-    isAvailable: row.is_available
+    isAvailable: row.is_available,
+    isSoldOut: row.is_sold_out
   };
 }
 

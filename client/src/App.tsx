@@ -8,11 +8,13 @@ import {
   fetchAdminMenuItems,
   fetchCurrentUser,
   fetchMenuItems,
+  fetchOrderEvents,
   fetchOrders,
   fetchStaffUsers,
   login,
   storeToken,
   updateMenuItem,
+  updateMenuItemSoldOut,
   updateOrder,
   updateStaffUser,
   updateOrderStatus
@@ -22,6 +24,7 @@ import type {
   FulfillmentType,
   MenuItem,
   Order,
+  OrderEvent,
   OrderFilters,
   OrderSource,
   OrderStatus,
@@ -67,6 +70,9 @@ function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [staffUsers, setStaffUsers] = useState<User[]>([]);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [historyOrder, setHistoryOrder] = useState<Order | null>(null);
+  const [orderEvents, setOrderEvents] = useState<OrderEvent[]>([]);
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
   const [selectedItems, setSelectedItems] = useState<Record<string, number>>({});
   const [orderSource, setOrderSource] = useState<OrderSource>('in_person');
   const [fulfillmentType, setFulfillmentType] = useState<FulfillmentType>('dine_in');
@@ -149,7 +155,7 @@ function App() {
         fetchMenuItems(),
         fetchOrders(toOrderApiFilters(filters)),
         currentUser?.role === 'admin' ? fetchStaffUsers() : Promise.resolve([]),
-        currentUser?.role === 'admin' ? fetchAdminMenuItems() : Promise.resolve([])
+        currentUser?.role === 'admin' || currentUser?.role === 'chef' ? fetchAdminMenuItems() : Promise.resolve([])
       ]);
       setMenuItems(menu);
       setOrders(orderList.orders);
@@ -194,6 +200,8 @@ function App() {
     setStaffUsers([]);
     setAdminMenuItems([]);
     setEditingOrderId(null);
+    setHistoryOrder(null);
+    setOrderEvents([]);
     setSelectedItems({});
     setServerName('');
     if (refreshTimeoutRef.current !== null) {
@@ -323,6 +331,19 @@ function App() {
     }
   }
 
+  async function handleViewHistory(order: Order) {
+    try {
+      setHistoryOrder(order);
+      setIsLoadingEvents(true);
+      setOrderEvents(await fetchOrderEvents(order.id));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load order history');
+    } finally {
+      setIsLoadingEvents(false);
+    }
+  }
+
   async function handleOrderFilterSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextFilters = {
@@ -434,10 +455,11 @@ function App() {
         name: newMenuName,
         category: newMenuCategory,
         priceCents: dollarsToCents(newMenuPrice),
-        isAvailable: newMenuAvailable
+        isAvailable: newMenuAvailable,
+        isSoldOut: false
       });
       setAdminMenuItems((current) => [...current, created].sort(compareMenuItems));
-      if (created.isAvailable) {
+      if (created.isAvailable && !created.isSoldOut) {
         setMenuItems((current) => [...current, created].sort(compareMenuItems));
       }
       setNewMenuName('');
@@ -459,12 +481,12 @@ function App() {
       setMenuItems((current) => {
         const withoutUpdated = current.filter((item) => item.id !== updated.id);
 
-        return updated.isAvailable
+        return updated.isAvailable && !updated.isSoldOut
           ? [...withoutUpdated, updated].sort(compareMenuItems)
           : withoutUpdated;
       });
       setSelectedItems((current) => {
-        if (updated.isAvailable) {
+        if (updated.isAvailable && !updated.isSoldOut) {
           return current;
         }
 
@@ -475,6 +497,35 @@ function App() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update menu item');
+    }
+  }
+
+  async function handleSoldOutChange(menuItem: MenuItem, isSoldOut: boolean) {
+    try {
+      const updated = user?.role === 'admin'
+        ? await updateMenuItem(menuItem.id, { isSoldOut })
+        : await updateMenuItemSoldOut(menuItem.id, isSoldOut);
+
+      setAdminMenuItems((current) => current.map((item) => (item.id === updated.id ? updated : item)).sort(compareMenuItems));
+      setMenuItems((current) => {
+        const withoutUpdated = current.filter((item) => item.id !== updated.id);
+
+        return updated.isAvailable && !updated.isSoldOut
+          ? [...withoutUpdated, updated].sort(compareMenuItems)
+          : withoutUpdated;
+      });
+      setSelectedItems((current) => {
+        if (!updated.isSoldOut) {
+          return current;
+        }
+
+        const next = { ...current };
+        delete next[updated.id];
+        return next;
+      });
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update sold out status');
     }
   }
 
@@ -547,6 +598,31 @@ function App() {
         </header>
 
         {error && <div className="alert">{error}</div>}
+
+        {user.role === 'chef' && (
+          <section className="admin-panel sold-out-panel">
+            <div className="panel-heading">
+              <h2>Sold Out</h2>
+              <span>{adminMenuItems.filter((item) => item.isSoldOut).length} unavailable today</span>
+            </div>
+
+            <div className="sold-out-grid">
+              {adminMenuItems.filter((item) => item.isAvailable).map((menuItem) => (
+                <label key={menuItem.id} className="sold-out-item">
+                  <input
+                    type="checkbox"
+                    checked={menuItem.isSoldOut}
+                    onChange={(event) => handleSoldOutChange(menuItem, event.target.checked)}
+                  />
+                  <span>
+                    <strong>{menuItem.name}</strong>
+                    <small>{menuItem.category}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </section>
+        )}
 
         <div className={user.role === 'chef' ? 'layout kitchen-layout' : 'layout'}>
           {user.role !== 'chef' && (
@@ -766,6 +842,11 @@ function App() {
                     <div className="order-actions">
                       <strong>{formatMoney(order.totalCents)}</strong>
                       <div>
+                        {user.role === 'admin' && (
+                          <button onClick={() => handleViewHistory(order)}>
+                            History
+                          </button>
+                        )}
                         {canEditOrder(order.status, user.role) && (
                           <button onClick={() => handleEditOrder(order)}>
                             Edit
@@ -904,6 +985,14 @@ function App() {
                     />
                     Available
                   </label>
+                  <label className="toggle-label">
+                    <input
+                      type="checkbox"
+                      checked={menuItem.isSoldOut}
+                      onChange={(event) => handleSoldOutChange(menuItem, event.target.checked)}
+                    />
+                    Sold Out
+                  </label>
                 </article>
               ))}
             </div>
@@ -990,6 +1079,40 @@ function App() {
           </section>
         )}
       </section>
+
+      {historyOrder && (
+        <div className="modal-backdrop">
+          <section className="history-modal" role="dialog" aria-modal="true" aria-label="Order history">
+            <div className="panel-heading">
+              <div>
+                <h2>Order History</h2>
+                <span>{getOrderTitle(historyOrder)}</span>
+              </div>
+              <button className="ghost-button" onClick={() => setHistoryOrder(null)}>
+                Close
+              </button>
+            </div>
+
+            {isLoadingEvents ? (
+              <div className="empty-state">Loading history...</div>
+            ) : orderEvents.length === 0 ? (
+              <div className="empty-state">No history yet</div>
+            ) : (
+              <ol className="history-list">
+                {orderEvents.map((event) => (
+                  <li key={event.id}>
+                    <div>
+                      <strong>{formatOrderEvent(event)}</strong>
+                      <span>{event.actorName} / {event.actorRole}</span>
+                    </div>
+                    <time>{formatDateTime(event.createdAt)}</time>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+        </div>
+      )}
     </main>
   );
 }
@@ -1024,6 +1147,29 @@ function getOrderTitle(order: Order) {
   }
 
   return `Table ${order.tableNumber} / ${order.partySize} guests`;
+}
+
+function formatOrderEvent(event: OrderEvent) {
+  if (event.eventType === 'order_created') {
+    return 'Order created';
+  }
+
+  if (event.eventType === 'order_updated') {
+    return 'Order updated';
+  }
+
+  if (event.fromStatus && event.toStatus) {
+    return `${statusLabels[event.fromStatus]} -> ${statusLabels[event.toStatus]}`;
+  }
+
+  return 'Status changed';
+}
+
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(new Date(value));
 }
 
 function getAllowedNextStatus(status: OrderStatus, role: UserRole) {

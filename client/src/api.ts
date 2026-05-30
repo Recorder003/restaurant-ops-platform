@@ -3,6 +3,7 @@ import type {
   FulfillmentType,
   MenuItem,
   Order,
+  OrderEvent,
   OrderFilters,
   OrderListResponse,
   OrderSource,
@@ -121,6 +122,7 @@ export async function createMenuItem(input: {
   category: string;
   priceCents: number;
   isAvailable: boolean;
+  isSoldOut: boolean;
 }): Promise<MenuItem> {
   return request('/menu-items', {
     method: 'POST',
@@ -134,11 +136,20 @@ export async function updateMenuItem(id: string, input: Partial<{
   category: string;
   priceCents: number;
   isAvailable: boolean;
+  isSoldOut: boolean;
 }>): Promise<MenuItem> {
   return request(`/menu-items/${id}`, {
     method: 'PATCH',
     token: getStoredToken(),
     body: JSON.stringify(input)
+  });
+}
+
+export async function updateMenuItemSoldOut(id: string, isSoldOut: boolean): Promise<MenuItem> {
+  return request(`/menu-items/${id}/sold-out`, {
+    method: 'PATCH',
+    token: getStoredToken(),
+    body: JSON.stringify({ isSoldOut })
   });
 }
 
@@ -181,6 +192,12 @@ export async function updateOrderStatus(id: string, status: OrderStatus): Promis
     method: 'PATCH',
     token: getStoredToken(),
     body: JSON.stringify({ status })
+  });
+}
+
+export async function fetchOrderEvents(id: string): Promise<OrderEvent[]> {
+  return request(`/orders/${id}/events`, {
+    token: getStoredToken()
   });
 }
 

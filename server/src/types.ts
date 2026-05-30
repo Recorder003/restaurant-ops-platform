@@ -1,4 +1,5 @@
 export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'served' | 'cancelled';
+export type OrderEventType = 'order_created' | 'order_updated' | 'status_changed';
 export type OrderSource = 'in_person' | 'phone';
 export type FulfillmentType = 'dine_in' | 'to_go' | 'pickup' | 'delivery';
 export type UserRole = 'staff' | 'admin' | 'chef';
@@ -17,6 +18,7 @@ export type MenuItem = {
   category: string;
   priceCents: number;
   isAvailable: boolean;
+  isSoldOut: boolean;
 };
 
 export type OrderItem = {
@@ -41,4 +43,16 @@ export type Order = {
   createdAt: string;
   updatedAt: string;
   items: OrderItem[];
+};
+
+export type OrderEvent = {
+  id: string;
+  orderId: string;
+  eventType: OrderEventType;
+  fromStatus: OrderStatus | null;
+  toStatus: OrderStatus | null;
+  actorUserId: string | null;
+  actorName: string;
+  actorRole: UserRole;
+  createdAt: string;
 };

@@ -1,8 +1,9 @@
 import { Router } from 'express';
+import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { requireAuth, requireRole, type AuthenticatedRequest } from './authMiddleware.js';
 import { pool, query } from './db.js';
-import type { FulfillmentType, Order, OrderItem, OrderSource, OrderStatus } from './types.js';
+import type { FulfillmentType, Order, OrderEvent, OrderEventType, OrderItem, OrderSource, OrderStatus, User } from './types.js';
 
 const router = Router();
 
@@ -213,6 +214,8 @@ router.post('/', requireRole('staff', 'admin'), async (req, res, next) => {
   const client = await pool.connect();
 
   try {
+    const currentUser = (req as unknown as AuthenticatedRequest).user;
+
     await client.query('BEGIN');
 
     const orderResult = await client.query<{ id: string }>(
@@ -244,12 +247,12 @@ router.post('/', requireRole('staff', 'admin'), async (req, res, next) => {
 
     for (const item of parsed.data.items) {
       const menuResult = await client.query<{ price_cents: number }>(
-        'SELECT price_cents FROM menu_items WHERE id = $1 AND is_available = TRUE',
+        'SELECT price_cents FROM menu_items WHERE id = $1 AND is_available = TRUE AND is_sold_out = FALSE',
         [item.menuItemId]
       );
 
       if (menuResult.rowCount === 0) {
-        throw new OrderInputError(`Menu item ${item.menuItemId} is unavailable or does not exist.`);
+        throw new OrderInputError(`Menu item ${item.menuItemId} is unavailable, sold out, or does not exist.`);
       }
 
       await client.query(
@@ -260,6 +263,12 @@ router.post('/', requireRole('staff', 'admin'), async (req, res, next) => {
         [orderId, item.menuItemId, item.quantity, menuResult.rows[0].price_cents]
       );
     }
+
+    await insertOrderEvent(client, {
+      orderId,
+      eventType: 'order_created',
+      actor: currentUser
+    });
 
     await client.query('COMMIT');
 
@@ -291,6 +300,7 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
 
   try {
     const orderId = String(req.params.id);
+    const currentUser = (req as unknown as AuthenticatedRequest).user;
 
     await client.query('BEGIN');
 
@@ -341,12 +351,12 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
 
     for (const item of parsed.data.items) {
       const menuResult = await client.query<{ price_cents: number }>(
-        'SELECT price_cents FROM menu_items WHERE id = $1 AND is_available = TRUE',
+        'SELECT price_cents FROM menu_items WHERE id = $1 AND is_available = TRUE AND is_sold_out = FALSE',
         [item.menuItemId]
       );
 
       if (menuResult.rowCount === 0) {
-        throw new OrderInputError(`Menu item ${item.menuItemId} is unavailable or does not exist.`);
+        throw new OrderInputError(`Menu item ${item.menuItemId} is unavailable, sold out, or does not exist.`);
       }
 
       await client.query(
@@ -357,6 +367,12 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
         [orderId, item.menuItemId, item.quantity, menuResult.rows[0].price_cents]
       );
     }
+
+    await insertOrderEvent(client, {
+      orderId,
+      eventType: 'order_updated',
+      actor: currentUser
+    });
 
     await client.query('COMMIT');
 
@@ -375,6 +391,33 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
   }
 });
 
+router.get('/:id/events', requireRole('admin'), async (req, res, next) => {
+  try {
+    const { rows } = await query<OrderEventRow>(
+      `
+        SELECT
+          id,
+          order_id,
+          event_type,
+          from_status,
+          to_status,
+          actor_user_id,
+          actor_name,
+          actor_role,
+          created_at
+        FROM order_events
+        WHERE order_id = $1
+        ORDER BY created_at ASC
+      `,
+      [req.params.id]
+    );
+
+    res.json(rows.map(mapOrderEvent));
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.patch('/:id/status', requireRole('staff', 'admin', 'chef'), async (req, res, next) => {
   const parsed = statusSchema.safeParse(req.body);
 
@@ -383,11 +426,16 @@ router.patch('/:id/status', requireRole('staff', 'admin', 'chef'), async (req, r
     return;
   }
 
+  const client = await pool.connect();
+
   try {
     const orderId = String(req.params.id);
-    const current = await query<{ status: OrderStatus }>('SELECT status FROM orders WHERE id = $1', [orderId]);
+    await client.query('BEGIN');
+
+    const current = await client.query<{ status: OrderStatus }>('SELECT status FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
 
     if (current.rowCount === 0) {
+      await client.query('ROLLBACK');
       res.status(404).json({ message: 'Order not found' });
       return;
     }
@@ -397,23 +445,40 @@ router.patch('/:id/status', requireRole('staff', 'admin', 'chef'), async (req, r
     const currentUser = (req as unknown as AuthenticatedRequest).user;
 
     if (currentStatus !== nextStatus && !orderTransitions[currentStatus].includes(nextStatus)) {
+      await client.query('ROLLBACK');
       res.status(409).json({ message: `Cannot change order from ${currentStatus} to ${nextStatus}` });
       return;
     }
 
     if (currentUser.role !== 'admin' && !isRoleAllowedTransition(currentUser.role, currentStatus, nextStatus)) {
+      await client.query('ROLLBACK');
       res.status(403).json({ message: 'You do not have permission to make this status change' });
       return;
     }
 
-    await query(
+    await client.query(
       'UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2',
       [nextStatus, orderId]
     );
 
+    if (currentStatus !== nextStatus) {
+      await insertOrderEvent(client, {
+        orderId,
+        eventType: 'status_changed',
+        fromStatus: currentStatus,
+        toStatus: nextStatus,
+        actor: currentUser
+      });
+    }
+
+    await client.query('COMMIT');
+
     res.json(await getOrderById(orderId));
   } catch (error) {
+    await client.query('ROLLBACK');
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -477,6 +542,18 @@ type OrderListRow = OrderRow & {
   total_count: number;
 };
 
+type OrderEventRow = {
+  id: string;
+  order_id: string;
+  event_type: OrderEventType;
+  from_status: OrderStatus | null;
+  to_status: OrderStatus | null;
+  actor_user_id: string | null;
+  actor_name: string;
+  actor_role: User['role'];
+  created_at: Date;
+};
+
 function mapOrder(row: OrderRow): Order {
   return {
     id: row.id,
@@ -493,6 +570,55 @@ function mapOrder(row: OrderRow): Order {
     updatedAt: row.updated_at.toISOString(),
     items: row.items
   };
+}
+
+function mapOrderEvent(row: OrderEventRow): OrderEvent {
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    eventType: row.event_type,
+    fromStatus: row.from_status,
+    toStatus: row.to_status,
+    actorUserId: row.actor_user_id,
+    actorName: row.actor_name,
+    actorRole: row.actor_role,
+    createdAt: row.created_at.toISOString()
+  };
+}
+
+async function insertOrderEvent(
+  client: PoolClient,
+  input: {
+    orderId: string;
+    eventType: OrderEventType;
+    fromStatus?: OrderStatus;
+    toStatus?: OrderStatus;
+    actor: User;
+  }
+) {
+  await client.query(
+    `
+      INSERT INTO order_events (
+        order_id,
+        event_type,
+        from_status,
+        to_status,
+        actor_user_id,
+        actor_name,
+        actor_role
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `,
+    [
+      input.orderId,
+      input.eventType,
+      input.fromStatus ?? null,
+      input.toStatus ?? null,
+      input.actor.id,
+      input.actor.name,
+      input.actor.role
+    ]
+  );
 }
 
 class OrderInputError extends Error {}
