@@ -6,14 +6,21 @@
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace server\" \"npm run dev --workspace client\"",
     "build": "npm run build --workspace server && npm run build --workspace client",
+    "start": "npm run start --workspace server",
+    "preview:client": "npm run preview --workspace client",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace client",
-    "db:init": "node scripts/init-db.mjs"
+    "test": "npm run build --workspace server && node scripts/test-api.mjs",
+    "test:e2e": "npm run build --workspace server && node scripts/test-e2e.mjs",
+    "test:perf": "npm run build --workspace server && node scripts/test-performance.mjs",
+    "db:init": "node scripts/init-db.mjs",
+    "db:migrate": "node scripts/migrate-db.mjs"
   },
   "workspaces": [
     "client",
     "server"
   ],
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "concurrently": "^9.1.0"
   }
 }

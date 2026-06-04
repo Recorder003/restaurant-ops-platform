@@ -5,6 +5,7 @@ import type {
   Order,
   OrderEvent,
   OrderFilters,
+  OrderItemStatus,
   OrderListResponse,
   OrderSource,
   OrderStatus,
@@ -16,6 +17,26 @@ import type {
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api';
 const TOKEN_STORAGE_KEY = 'restaurant_ops_token';
+const UNAUTHORIZED_EVENT = 'restaurant-ops:unauthorized';
+
+export type RealtimeEvent = {
+  type: 'order_changed' | 'table_changed' | 'menu_changed' | 'staff_changed';
+  action: string;
+  resourceId?: string;
+  createdAt: string;
+};
+
+export class ApiError extends Error {
+  status: number;
+  requestId?: string;
+
+  constructor(message: string, status: number, requestId?: string) {
+    super(requestId ? `${message} Reference: ${requestId}` : message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.requestId = requestId;
+  }
+}
 
 export function getStoredToken() {
   return localStorage.getItem(TOKEN_STORAGE_KEY);
@@ -59,6 +80,10 @@ export async function fetchOrders(filters: OrderFilters): Promise<OrderListRespo
 
   if (filters.status) {
     params.set('status', filters.status);
+  }
+
+  if (filters.activeOnly) {
+    params.set('activeOnly', 'true');
   }
 
   if (filters.tableNumber) {
@@ -231,6 +256,14 @@ export async function updateOrderStatus(id: string, status: OrderStatus): Promis
   });
 }
 
+export async function updateOrderItemStatus(orderId: string, itemId: string, status: OrderItemStatus): Promise<Order> {
+  return request(`/orders/${orderId}/items/${itemId}/status`, {
+    method: 'PATCH',
+    token: getStoredToken(),
+    body: JSON.stringify({ status })
+  });
+}
+
 export async function checkoutOrder(id: string, input: {
   paymentMethod: PaymentMethod;
   subtotalCents: number;
@@ -251,6 +284,76 @@ export async function fetchOrderEvents(id: string): Promise<OrderEvent[]> {
   });
 }
 
+export function subscribeToRealtimeEvents(
+  onEvent: (event: RealtimeEvent) => void,
+  onError?: (error: Error) => void
+) {
+  const controller = new AbortController();
+  const token = getStoredToken();
+
+  if (!token) {
+    return () => controller.abort();
+  }
+
+  void readRealtimeEvents(token, controller.signal, onEvent).catch((error) => {
+    if (!controller.signal.aborted) {
+      onError?.(error instanceof Error ? error : new Error('Realtime connection failed'));
+    }
+  });
+
+  return () => controller.abort();
+}
+
+async function readRealtimeEvents(
+  token: string,
+  signal: AbortSignal,
+  onEvent: (event: RealtimeEvent) => void
+) {
+  const response = await fetch(`${API_URL}/events`, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    },
+    signal
+  });
+
+  if (response.status === 401) {
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+    return;
+  }
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Realtime connection failed with status ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (!signal.aborted) {
+    const { value, done } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split('\n\n');
+    buffer = events.pop() ?? '';
+
+    for (const rawEvent of events) {
+      const dataLine = rawEvent
+        .split('\n')
+        .find((line) => line.startsWith('data: '));
+
+      if (!dataLine) {
+        continue;
+      }
+
+      onEvent(JSON.parse(dataLine.slice('data: '.length)) as RealtimeEvent);
+    }
+  }
+}
+
 type ApiRequestInit = RequestInit & {
   token?: string | null;
 };
@@ -267,7 +370,15 @@ async function request<T>(path: string, init?: ApiRequestInit): Promise<T> {
 
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.message ?? `Request failed with status ${response.status}`);
+    const requestId = typeof payload.requestId === 'string'
+      ? payload.requestId
+      : response.headers.get('x-request-id') ?? undefined;
+
+    if (response.status === 401 && init?.token) {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+    }
+
+    throw new ApiError(payload.message ?? `Request failed with status ${response.status}`, response.status, requestId);
   }
 
   if (response.status === 204) {

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, type AuthenticatedRequest } from './authMiddleware.js';
 import { query } from './db.js';
+import { loginRateLimit, recordFailedLogin, recordSuccessfulLogin } from './loginRateLimit.js';
 import { verifyPassword } from './passwords.js';
 import { createAccessToken } from './tokens.js';
 import type { User, UserRole } from './types.js';
@@ -13,7 +14,7 @@ const loginSchema = z.object({
   password: z.string().min(1).max(200)
 });
 
-router.post('/login', async (req, res, next) => {
+router.post('/login', loginRateLimit, async (req, res, next) => {
   const parsed = loginSchema.safeParse(req.body);
 
   if (!parsed.success) {
@@ -29,10 +30,12 @@ router.post('/login', async (req, res, next) => {
     const user = rows[0];
 
     if (!user || !user.is_active || !(await verifyPassword(parsed.data.password, user.password_hash))) {
+      recordFailedLogin(req);
       res.status(401).json({ message: 'Invalid email or password' });
       return;
     }
 
+    recordSuccessfulLogin(req);
     const safeUser = mapUser(user);
 
     res.json({

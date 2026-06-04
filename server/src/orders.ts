@@ -3,7 +3,8 @@ import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { requireAuth, requireRole, type AuthenticatedRequest } from './authMiddleware.js';
 import { pool, query } from './db.js';
-import type { FulfillmentType, Order, OrderEvent, OrderEventType, OrderItem, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, TableStatus, User } from './types.js';
+import { broadcastRealtimeEvent } from './realtime.js';
+import type { FulfillmentType, Order, OrderEvent, OrderEventType, OrderItem, OrderItemStatus, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, TableStatus, User } from './types.js';
 
 const router = Router();
 const EXTRA_CHAIRS_ALLOWED = 2;
@@ -76,6 +77,9 @@ const updateOrderSchema = createOrderSchema;
 const statusSchema = z.object({
   status: z.enum(['pending', 'preparing', 'ready', 'served', 'cancelled'])
 });
+const itemStatusSchema = z.object({
+  status: z.enum(['pending', 'preparing', 'ready', 'served'])
+});
 
 const checkoutSchema = z.object({
   paymentMethod: z.enum(['cash', 'card']),
@@ -89,6 +93,7 @@ const checkoutSchema = z.object({
 
 const listOrdersSchema = z.object({
   status: z.enum(['pending', 'preparing', 'ready', 'served', 'cancelled']).optional(),
+  activeOnly: z.enum(['true', 'false']).optional().transform((value) => value === 'true'),
   tableNumber: z.string().trim().max(20).optional(),
   serverName: z.string().trim().max(80).optional(),
   fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -126,6 +131,11 @@ router.get('/', requireRole('staff', 'admin', 'chef'), async (req, res, next) =>
     if (filters.status) {
       params.push(filters.status);
       where.push(`o.status = $${params.length}`);
+    }
+
+    if (filters.activeOnly) {
+      where.push(`o.status != 'cancelled'`);
+      where.push(`o.payment_status != 'paid'`);
     }
 
     if (filters.tableNumber) {
@@ -194,7 +204,10 @@ router.get('/', requireRole('staff', 'admin', 'chef'), async (req, res, next) =>
               'menuItemId', mi.id,
               'menuItemName', mi.name,
               'quantity', oi.quantity,
-              'priceCents', oi.price_cents
+              'priceCents', oi.price_cents,
+              'status', oi.status,
+              'preparedAt', oi.prepared_at,
+              'servedAt', oi.served_at
             )
           ) FILTER (WHERE oi.id IS NOT NULL),
           '[]'
@@ -278,13 +291,7 @@ router.post('/', requireRole('staff', 'admin'), async (req, res, next) => {
         throw new OrderInputError(`Menu item ${item.menuItemId} is unavailable, sold out, or does not exist.`);
       }
 
-      await client.query(
-        `
-          INSERT INTO order_items (order_id, menu_item_id, quantity, price_cents)
-          VALUES ($1, $2, $3, $4)
-        `,
-        [orderId, item.menuItemId, item.quantity, menuResult.rows[0].price_cents]
-      );
+      await insertUnitOrderItems(client, orderId, item.menuItemId, item.quantity, menuResult.rows[0].price_cents);
     }
 
     await insertOrderEvent(client, {
@@ -296,6 +303,7 @@ router.post('/', requireRole('staff', 'admin'), async (req, res, next) => {
     await client.query('COMMIT');
 
     const created = await getOrderById(orderId);
+    broadcastRealtimeEvent({ type: 'order_changed', action: 'created', resourceId: orderId });
     res.status(201).json(created);
   } catch (error) {
     await client.query('ROLLBACK');
@@ -401,13 +409,7 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
         throw new OrderInputError(`Menu item ${item.menuItemId} is unavailable, sold out, or does not exist.`);
       }
 
-      await client.query(
-        `
-          INSERT INTO order_items (order_id, menu_item_id, quantity, price_cents)
-          VALUES ($1, $2, $3, $4)
-        `,
-        [orderId, item.menuItemId, item.quantity, menuResult.rows[0].price_cents]
-      );
+      await insertUnitOrderItems(client, orderId, item.menuItemId, item.quantity, menuResult.rows[0].price_cents);
     }
 
     await insertOrderEvent(client, {
@@ -418,7 +420,9 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
 
     await client.query('COMMIT');
 
-    res.json(await getOrderById(orderId));
+    const updated = await getOrderById(orderId);
+    broadcastRealtimeEvent({ type: 'order_changed', action: 'updated', resourceId: orderId });
+    res.json(updated);
   } catch (error) {
     await client.query('ROLLBACK');
 
@@ -427,6 +431,90 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
       return;
     }
 
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.patch('/:orderId/items/:itemId/status', requireRole('staff', 'admin', 'chef'), async (req, res, next) => {
+  const parsed = itemStatusSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    res.status(400).json({ message: 'Invalid item status payload' });
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    const orderId = String(req.params.orderId);
+    const itemId = String(req.params.itemId);
+    const nextStatus = parsed.data.status;
+    const currentUser = (req as unknown as AuthenticatedRequest).user;
+
+    await client.query('BEGIN');
+
+    const current = await client.query<{
+      status: OrderItemStatus;
+      order_status: OrderStatus;
+    }>(
+      `
+        SELECT oi.status, o.status AS order_status
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        WHERE oi.id = $1 AND oi.order_id = $2
+        FOR UPDATE OF oi, o
+      `,
+      [itemId, orderId]
+    );
+
+    if (current.rowCount === 0) {
+      await client.query('ROLLBACK');
+      res.status(404).json({ message: 'Order item not found' });
+      return;
+    }
+
+    if (current.rows[0].order_status === 'cancelled') {
+      await client.query('ROLLBACK');
+      res.status(409).json({ message: 'Cancelled orders cannot be updated' });
+      return;
+    }
+
+    const currentStatus = current.rows[0].status;
+
+    if (currentStatus !== nextStatus && !itemTransitions[currentStatus].includes(nextStatus)) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ message: `Cannot change item from ${currentStatus} to ${nextStatus}` });
+      return;
+    }
+
+    if (currentUser.role !== 'admin' && !isRoleAllowedItemTransition(currentUser.role, currentStatus, nextStatus)) {
+      await client.query('ROLLBACK');
+      res.status(403).json({ message: 'You do not have permission to make this item status change' });
+      return;
+    }
+
+    await client.query(
+      `
+        UPDATE order_items
+        SET
+          status = $1,
+          prepared_at = CASE WHEN $1 IN ('ready', 'served') AND prepared_at IS NULL THEN NOW() ELSE prepared_at END,
+          served_at = CASE WHEN $1 = 'served' AND served_at IS NULL THEN NOW() ELSE served_at END
+        WHERE id = $2 AND order_id = $3
+      `,
+      [nextStatus, itemId, orderId]
+    );
+
+    await syncOrderStatusFromItems(client, orderId, currentUser);
+    await client.query('COMMIT');
+
+    const updated = await getOrderById(orderId);
+    broadcastRealtimeEvent({ type: 'order_changed', action: 'item_status_changed', resourceId: orderId });
+    res.json(updated);
+  } catch (error) {
+    await client.query('ROLLBACK');
     next(error);
   } finally {
     client.release();
@@ -508,6 +596,7 @@ router.patch('/:id/status', requireRole('staff', 'admin', 'chef'), async (req, r
       'UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2',
       [nextStatus, orderId]
     );
+    await updateOrderItemsForOrderStatus(client, orderId, nextStatus);
 
     if (current.rows[0].fulfillment_type === 'dine_in' && current.rows[0].table_number) {
       if (nextStatus === 'served') {
@@ -531,7 +620,9 @@ router.patch('/:id/status', requireRole('staff', 'admin', 'chef'), async (req, r
 
     await client.query('COMMIT');
 
-    res.json(await getOrderById(orderId));
+    const updated = await getOrderById(orderId);
+    broadcastRealtimeEvent({ type: 'order_changed', action: 'status_changed', resourceId: orderId });
+    res.json(updated);
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
@@ -643,7 +734,9 @@ router.post('/:id/checkout', requireRole('staff', 'admin'), async (req, res, nex
 
     await client.query('COMMIT');
 
-    res.json(await getOrderById(orderId));
+    const updated = await getOrderById(orderId);
+    broadcastRealtimeEvent({ type: 'order_changed', action: 'payment_recorded', resourceId: orderId });
+    res.json(updated);
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
@@ -682,7 +775,10 @@ async function getOrderById(id: string) {
               'menuItemId', mi.id,
               'menuItemName', mi.name,
               'quantity', oi.quantity,
-              'priceCents', oi.price_cents
+              'priceCents', oi.price_cents,
+              'status', oi.status,
+              'preparedAt', oi.prepared_at,
+              'servedAt', oi.served_at
             )
           ) FILTER (WHERE oi.id IS NOT NULL),
           '[]'
@@ -765,6 +861,13 @@ function mapOrder(row: OrderRow): Order {
   };
 }
 
+const itemTransitions: Record<OrderItemStatus, OrderItemStatus[]> = {
+  pending: ['preparing'],
+  preparing: ['ready'],
+  ready: ['served'],
+  served: []
+};
+
 function mapOrderEvent(row: OrderEventRow): OrderEvent {
   return {
     id: row.id,
@@ -822,6 +925,24 @@ async function insertOrderEvent(
   );
 }
 
+async function insertUnitOrderItems(
+  client: PoolClient,
+  orderId: string,
+  menuItemId: string,
+  quantity: number,
+  priceCents: number
+) {
+  for (let index = 0; index < quantity; index += 1) {
+    await client.query(
+      `
+        INSERT INTO order_items (order_id, menu_item_id, quantity, price_cents)
+        VALUES ($1, $2, 1, $3)
+      `,
+      [orderId, menuItemId, priceCents]
+    );
+  }
+}
+
 async function occupyTable(client: PoolClient, tableNumber: string, partySize: number) {
   const tableResult = await client.query<{ status: TableStatus; capacity: number }>(
     'SELECT status, capacity FROM restaurant_tables WHERE name = $1 FOR UPDATE',
@@ -869,6 +990,97 @@ async function setTableStatus(client: PoolClient, tableNumber: string, status: T
   );
 }
 
+async function updateOrderItemsForOrderStatus(client: PoolClient, orderId: string, status: OrderStatus) {
+  if (status === 'preparing') {
+    await client.query(
+      "UPDATE order_items SET status = 'preparing' WHERE order_id = $1 AND status = 'pending'",
+      [orderId]
+    );
+  }
+
+  if (status === 'ready') {
+    await client.query(
+      `
+        UPDATE order_items
+        SET status = 'ready', prepared_at = COALESCE(prepared_at, NOW())
+        WHERE order_id = $1 AND status IN ('pending', 'preparing')
+      `,
+      [orderId]
+    );
+  }
+
+  if (status === 'served') {
+    await client.query(
+      `
+        UPDATE order_items
+        SET
+          status = 'served',
+          prepared_at = COALESCE(prepared_at, NOW()),
+          served_at = COALESCE(served_at, NOW())
+        WHERE order_id = $1 AND status != 'served'
+      `,
+      [orderId]
+    );
+  }
+}
+
+async function syncOrderStatusFromItems(client: PoolClient, orderId: string, actor: User) {
+  const current = await client.query<{
+    status: OrderStatus;
+    fulfillment_type: FulfillmentType;
+    table_number: string | null;
+  }>(
+    'SELECT status, fulfillment_type, table_number FROM orders WHERE id = $1 FOR UPDATE',
+    [orderId]
+  );
+
+  if (current.rowCount === 0 || current.rows[0].status === 'cancelled') {
+    return;
+  }
+
+  const items = await client.query<{ status: OrderItemStatus }>(
+    'SELECT status FROM order_items WHERE order_id = $1',
+    [orderId]
+  );
+  const statuses = items.rows.map((item) => item.status);
+  const nextStatus = deriveOrderStatusFromItems(statuses);
+  const currentStatus = current.rows[0].status;
+
+  if (nextStatus === currentStatus) {
+    return;
+  }
+
+  await client.query('UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2', [nextStatus, orderId]);
+
+  if (current.rows[0].fulfillment_type === 'dine_in' && current.rows[0].table_number && nextStatus === 'served') {
+    await setTableStatus(client, current.rows[0].table_number, 'needs_cleaning');
+  }
+
+  await insertOrderEvent(client, {
+    orderId,
+    eventType: 'status_changed',
+    fromStatus: currentStatus,
+    toStatus: nextStatus,
+    actor
+  });
+}
+
+function deriveOrderStatusFromItems(statuses: OrderItemStatus[]): OrderStatus {
+  if (statuses.length === 0 || statuses.every((status) => status === 'pending')) {
+    return 'pending';
+  }
+
+  if (statuses.every((status) => status === 'served')) {
+    return 'served';
+  }
+
+  if (statuses.every((status) => status === 'ready' || status === 'served')) {
+    return 'ready';
+  }
+
+  return 'preparing';
+}
+
 class OrderInputError extends Error {}
 
 function isRoleAllowedTransition(role: 'staff' | 'chef', currentStatus: OrderStatus, nextStatus: OrderStatus) {
@@ -879,6 +1091,15 @@ function isRoleAllowedTransition(role: 'staff' | 'chef', currentStatus: OrderSta
 
   return (currentStatus === 'pending' && nextStatus === 'cancelled')
     || (currentStatus === 'ready' && nextStatus === 'served');
+}
+
+function isRoleAllowedItemTransition(role: 'staff' | 'chef', currentStatus: OrderItemStatus, nextStatus: OrderItemStatus) {
+  if (role === 'chef') {
+    return (currentStatus === 'pending' && nextStatus === 'preparing')
+      || (currentStatus === 'preparing' && nextStatus === 'ready');
+  }
+
+  return currentStatus === 'ready' && nextStatus === 'served';
 }
 
 export default router;

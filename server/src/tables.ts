@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole, type AuthenticatedRequest } from './authMiddleware.js';
 import { query } from './db.js';
+import { broadcastRealtimeEvent } from './realtime.js';
 import type { RestaurantTable, TableStatus } from './types.js';
 
 const router = Router();
@@ -60,7 +61,9 @@ router.post('/', requireRole('admin'), async (req, res, next) => {
       [parsed.data.name, parsed.data.capacity]
     );
 
-    res.status(201).json(mapTable(rows[0]));
+    const table = mapTable(rows[0]);
+    broadcastRealtimeEvent({ type: 'table_changed', action: 'created', resourceId: table.id });
+    res.status(201).json(table);
   } catch (error) {
     if (isUniqueViolation(error)) {
       res.status(409).json({ message: 'A table with this name already exists' });
@@ -142,7 +145,9 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
       return;
     }
 
-    res.json(mapTable(rows[0]));
+    const table = mapTable(rows[0]);
+    broadcastRealtimeEvent({ type: 'table_changed', action: 'updated', resourceId: table.id });
+    res.json(table);
   } catch (error) {
     next(error);
   }
@@ -160,6 +165,7 @@ router.delete('/:id', requireRole('admin'), async (req, res, next) => {
       return;
     }
 
+    broadcastRealtimeEvent({ type: 'table_changed', action: 'deleted', resourceId: String(req.params.id) });
     res.status(204).end();
   } catch (error) {
     next(error);

@@ -1,4 +1,5 @@
 export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'served' | 'cancelled';
+export type OrderItemStatus = 'pending' | 'preparing' | 'ready' | 'served';
 export type OrderEventType = 'order_created' | 'order_updated' | 'status_changed' | 'payment_recorded';
 export type OrderSource = 'in_person' | 'phone';
 export type FulfillmentType = 'dine_in' | 'to_go' | 'pickup' | 'delivery';
@@ -39,6 +40,9 @@ export type OrderItem = {
   menuItemName: string;
   quantity: number;
   priceCents: number;
+  status: OrderItemStatus;
+  preparedAt: string | null;
+  servedAt: string | null;
 };
 
 export type Order = {

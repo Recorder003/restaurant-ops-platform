@@ -919,6 +919,56 @@ li {
   justify-content: space-between;
 }
 
+.order-item-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 96px 110px;
+}
+
+.order-item-row small {
+  color: #6b7280;
+  display: block;
+  font-size: 0.82rem;
+  margin-top: 3px;
+}
+
+.order-item-controls {
+  align-items: center;
+  display: contents;
+}
+
+.order-item-controls .status {
+  justify-self: end;
+  text-align: center;
+  width: max-content;
+}
+
+.order-item-controls button {
+  justify-self: end;
+  width: 110px;
+}
+
+.order-item-controls .item-action-spacer {
+  display: block;
+  width: 110px;
+}
+
+.order-item-controls {
+  gap: 8px;
+}
+
+.order-item-controls button {
+  background: #ffffff;
+  border: 1px solid #d7d1c8;
+  border-radius: 6px;
+  color: #2f4f4f;
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
 .notes {
   background: #f7f4ef;
   border-left: 3px solid #c65c36;

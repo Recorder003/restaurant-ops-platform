@@ -1,4 +1,5 @@
 export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'served' | 'cancelled';
+export type OrderItemStatus = 'pending' | 'preparing' | 'ready' | 'served';
 export type OrderEventType = 'order_created' | 'order_updated' | 'status_changed' | 'payment_recorded';
 export type PaymentStatus = 'unpaid' | 'paid' | 'refunded';
 export type PaymentMethod = 'cash' | 'card';
@@ -39,6 +40,9 @@ export type OrderItem = {
   menuItemName: string;
   quantity: number;
   priceCents: number;
+  status: OrderItemStatus;
+  preparedAt: string | null;
+  servedAt: string | null;
 };
 
 export type Order = {
@@ -85,6 +89,7 @@ export type DraftItem = {
 
 export type OrderFilters = {
   status?: OrderStatus;
+  activeOnly?: boolean;
   tableNumber?: string;
   serverName?: string;
   fromDate?: string;

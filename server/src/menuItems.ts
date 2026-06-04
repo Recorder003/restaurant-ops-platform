@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireRole } from './authMiddleware.js';
 import { query } from './db.js';
+import { broadcastRealtimeEvent } from './realtime.js';
 import type { MenuItem } from './types.js';
 
 const router = Router();
@@ -67,7 +68,9 @@ router.post('/', requireAuth, requireRole('admin'), async (req, res, next) => {
       [parsed.data.name, parsed.data.category, parsed.data.priceCents, parsed.data.isAvailable, parsed.data.isSoldOut]
     );
 
-    res.status(201).json(mapMenuItem(rows[0]));
+    const menuItem = mapMenuItem(rows[0]);
+    broadcastRealtimeEvent({ type: 'menu_changed', action: 'created', resourceId: menuItem.id });
+    res.status(201).json(menuItem);
   } catch (error) {
     next(error);
   }
@@ -114,7 +117,9 @@ router.patch('/:id', requireAuth, requireRole('admin'), async (req, res, next) =
       return;
     }
 
-    res.json(mapMenuItem(rows[0]));
+    const menuItem = mapMenuItem(rows[0]);
+    broadcastRealtimeEvent({ type: 'menu_changed', action: 'updated', resourceId: menuItem.id });
+    res.json(menuItem);
   } catch (error) {
     next(error);
   }
@@ -144,7 +149,9 @@ router.patch('/:id/sold-out', requireAuth, requireRole('admin', 'chef'), async (
       return;
     }
 
-    res.json(mapMenuItem(rows[0]));
+    const menuItem = mapMenuItem(rows[0]);
+    broadcastRealtimeEvent({ type: 'menu_changed', action: 'sold_out_updated', resourceId: menuItem.id });
+    res.json(menuItem);
   } catch (error) {
     next(error);
   }

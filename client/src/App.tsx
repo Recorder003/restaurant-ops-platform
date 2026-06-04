@@ -17,9 +17,11 @@ import {
   fetchTables,
   login,
   storeToken,
+  subscribeToRealtimeEvents,
   updateMenuItem,
   updateMenuItemSoldOut,
   updateOrder,
+  updateOrderItemStatus,
   updateStaffUser,
   updateOrderStatus,
   updateTable
@@ -31,6 +33,8 @@ import type {
   Order,
   OrderEvent,
   OrderFilters,
+  OrderItem,
+  OrderItemStatus,
   OrderSource,
   OrderStatus,
   PaymentMethod,
@@ -45,6 +49,12 @@ const statusLabels: Record<OrderStatus, string> = {
   ready: 'Ready',
   served: 'Served',
   cancelled: 'Cancelled'
+};
+const itemStatusLabels: Record<OrderItemStatus, string> = {
+  pending: 'Pending',
+  preparing: 'Preparing',
+  ready: 'Ready',
+  served: 'Served'
 };
 
 const nextStatus: Partial<Record<OrderStatus, OrderStatus>> = {
@@ -74,7 +84,7 @@ const extraChairsAllowed = 2;
 const taxRate = 0.086;
 
 type OrderFilterState = Omit<OrderFilters, 'status'> & {
-  status: OrderStatus | 'all';
+  status: OrderStatus | 'all' | 'active';
 };
 type StaffOrderStep = 'service' | 'table' | 'party' | 'phone' | 'menu';
 
@@ -118,7 +128,7 @@ function App() {
   const [newTableName, setNewTableName] = useState('T13');
   const [newTableCapacity, setNewTableCapacity] = useState('4');
   const [orderFilters, setOrderFilters] = useState<OrderFilterState>({
-    status: 'all',
+    status: 'active',
     tableNumber: '',
     serverName: '',
     fromDate: '',
@@ -139,12 +149,38 @@ function App() {
   const [isCreatingStaff, setIsCreatingStaff] = useState(false);
   const [isCreatingMenuItem, setIsCreatingMenuItem] = useState(false);
   const [isCreatingTable, setIsCreatingTable] = useState(false);
+  const [processingOrderActionId, setProcessingOrderActionId] = useState<string | null>(null);
+  const [processingItemActionId, setProcessingItemActionId] = useState<string | null>(null);
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
   const refreshTimeoutRef = useRef<number | null>(null);
+  const realtimeRefreshTimeoutRef = useRef<number | null>(null);
   const orderFiltersRef = useRef(orderFilters);
   const userRef = useRef<User | null>(user);
 
   useEffect(() => {
     loadSession();
+  }, []);
+
+  useEffect(() => {
+    function handleUnauthorized() {
+      clearStoredToken();
+      setUser(null);
+      setOrders([]);
+      setStaffUsers([]);
+      setAdminMenuItems([]);
+      setRestaurantTables([]);
+      setEditingOrderId(null);
+      setHistoryOrder(null);
+      setCheckoutTarget(null);
+      setReceiptOrder(null);
+      setOrderEvents([]);
+      setSelectedItems({});
+      setServerName('');
+      setError('Your session expired. Please sign in again.');
+    }
+
+    window.addEventListener('restaurant-ops:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('restaurant-ops:unauthorized', handleUnauthorized);
   }, []);
 
   useEffect(() => {
@@ -157,8 +193,25 @@ function App() {
       if (refreshTimeoutRef.current !== null) {
         window.clearTimeout(refreshTimeoutRef.current);
       }
+      if (realtimeRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(realtimeRefreshTimeoutRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      return undefined;
+    }
+
+    return subscribeToRealtimeEvents((event) => {
+      if (event.action === 'connected') {
+        return;
+      }
+
+      scheduleRealtimeDataRefresh();
+    });
+  }, [user]);
 
   async function loadSession() {
     try {
@@ -177,12 +230,14 @@ function App() {
     }
   }
 
-  async function loadData(currentUser = user, filters = orderFilters) {
+  async function loadData(currentUser = user, filters = orderFilters, options: { silent?: boolean } = {}) {
     try {
-      setIsLoading(true);
+      if (!options.silent) {
+        setIsLoading(true);
+      }
       const [menu, orderList, staffList, adminMenu, tables] = await Promise.all([
         fetchMenuItems(),
-        fetchOrders(toOrderApiFilters(filters)),
+        fetchOrders(toOrderApiFilters(filters, currentUser)),
         currentUser?.role === 'admin' ? fetchStaffUsers() : Promise.resolve([]),
         currentUser?.role === 'admin' || currentUser?.role === 'chef' ? fetchAdminMenuItems() : Promise.resolve([]),
         currentUser ? fetchTables() : Promise.resolve([])
@@ -197,7 +252,9 @@ function App() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {
-      setIsLoading(false);
+      if (!options.silent) {
+        setIsLoading(false);
+      }
     }
   }
 
@@ -216,7 +273,7 @@ function App() {
       setServerName(session.user.name);
       setOrderFilters((current) => ({
         ...current,
-        status: session.user.role === 'chef' && !isKitchenStatus(current.status) ? 'all' : current.status,
+        status: getDefaultStatusFilter(session.user.role, current.status),
         page: 1
       }));
       await loadData(session.user);
@@ -245,6 +302,10 @@ function App() {
     if (refreshTimeoutRef.current !== null) {
       window.clearTimeout(refreshTimeoutRef.current);
       refreshTimeoutRef.current = null;
+    }
+    if (realtimeRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(realtimeRefreshTimeoutRef.current);
+      realtimeRefreshTimeoutRef.current = null;
     }
     setError(null);
   }
@@ -414,7 +475,7 @@ function App() {
     setPhoneNumber(order.phoneNumber ?? '');
     setServerName(order.serverName);
     setNotes(order.notes ?? '');
-    setSelectedItems(Object.fromEntries(order.items.map((item) => [item.menuItemId, item.quantity])));
+    setSelectedItems(getSelectedItemsFromOrder(order));
     setStaffOrderStep('menu');
     setError(null);
   }
@@ -429,10 +490,13 @@ function App() {
       return;
     }
 
+    const actionId = `${order.id}:${status}`;
+
     try {
+      setProcessingOrderActionId(actionId);
       const updated = await updateOrderStatus(order.id, status);
       setOrders((current) => {
-        if (orderFilters.status !== 'all' && updated.status !== orderFilters.status) {
+        if (!doesOrderMatchCurrentStatusFilter(updated, orderFilters.status)) {
           return current.filter((item) => item.id !== updated.id);
         }
 
@@ -447,6 +511,34 @@ function App() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update order status');
+    } finally {
+      setProcessingOrderActionId(null);
+    }
+  }
+
+  async function handleItemStatusChange(order: Order, item: OrderItem, status: OrderItemStatus) {
+    const actionId = `${item.id}:${status}`;
+
+    try {
+      setProcessingItemActionId(actionId);
+      const updated = await updateOrderItemStatus(order.id, item.id, status);
+      setOrders((current) => {
+        if (!doesOrderMatchCurrentStatusFilter(updated, orderFilters.status)) {
+          return current.filter((candidate) => candidate.id !== updated.id);
+        }
+
+        return current.map((candidate) => (candidate.id === updated.id ? updated : candidate));
+      });
+
+      if (updated.fulfillmentType === 'dine_in' && updated.status === 'served') {
+        await refreshTables();
+      }
+
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update item status');
+    } finally {
+      setProcessingItemActionId(null);
     }
   }
 
@@ -494,6 +586,7 @@ function App() {
     }
 
     try {
+      setIsCheckingOut(true);
       const updated = await checkoutOrder(checkoutTarget.id, {
         paymentMethod: checkoutPaymentMethod,
         subtotalCents: checkoutTarget.totalCents,
@@ -506,6 +599,8 @@ function App() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to checkout order');
+    } finally {
+      setIsCheckingOut(false);
     }
   }
 
@@ -513,7 +608,7 @@ function App() {
     event.preventDefault();
     const nextFilters = {
       ...orderFilters,
-      status: user?.role === 'chef' && !isKitchenStatus(orderFilters.status) ? 'all' : orderFilters.status,
+      status: getDefaultStatusFilter(user?.role, orderFilters.status),
       page: 1
     };
     setOrderFilters(nextFilters);
@@ -522,7 +617,7 @@ function App() {
 
   async function handleOrderFilterReset() {
     const nextFilters: OrderFilterState = {
-      status: 'all',
+      status: getDefaultStatusFilter(user?.role),
       tableNumber: '',
       serverName: '',
       fromDate: '',
@@ -547,8 +642,19 @@ function App() {
 
     refreshTimeoutRef.current = window.setTimeout(() => {
       refreshTimeoutRef.current = null;
-      loadData(userRef.current, orderFiltersRef.current);
+      loadData(userRef.current, orderFiltersRef.current, { silent: true });
     }, 3000);
+  }
+
+  function scheduleRealtimeDataRefresh() {
+    if (realtimeRefreshTimeoutRef.current !== null) {
+      return;
+    }
+
+    realtimeRefreshTimeoutRef.current = window.setTimeout(() => {
+      realtimeRefreshTimeoutRef.current = null;
+      loadData(userRef.current, orderFiltersRef.current, { silent: true });
+    }, 500);
   }
 
   async function handleCreateStaff(event: FormEvent<HTMLFormElement>) {
@@ -1196,10 +1302,11 @@ function App() {
                     value={orderFilters.status}
                     onChange={(event) => setOrderFilters((current) => ({
                       ...current,
-                      status: event.target.value as OrderStatus | 'all'
+                      status: event.target.value as OrderStatus | 'all' | 'active'
                     }))}
                   >
-                    <option value="all">All Statuses</option>
+                    {user.role === 'staff' && <option value="active">Active Orders</option>}
+                    {user.role !== 'staff' && <option value="all">All Statuses</option>}
                     {getVisibleStatusOptions(user.role).map(([value, label]) => (
                       <option key={value} value={value}>{label}</option>
                     ))}
@@ -1212,29 +1319,33 @@ function App() {
                     onChange={(event) => setOrderFilters((current) => ({ ...current, tableNumber: event.target.value }))}
                   />
                 </label>
-                <label>
-                  Server
-                  <input
-                    value={orderFilters.serverName}
-                    onChange={(event) => setOrderFilters((current) => ({ ...current, serverName: event.target.value }))}
-                  />
-                </label>
-                <label>
-                  From
-                  <input
-                    type="date"
-                    value={orderFilters.fromDate}
-                    onChange={(event) => setOrderFilters((current) => ({ ...current, fromDate: event.target.value }))}
-                  />
-                </label>
-                <label>
-                  To
-                  <input
-                    type="date"
-                    value={orderFilters.toDate}
-                    onChange={(event) => setOrderFilters((current) => ({ ...current, toDate: event.target.value }))}
-                  />
-                </label>
+                {user.role !== 'staff' && (
+                  <>
+                    <label>
+                      Server
+                      <input
+                        value={orderFilters.serverName}
+                        onChange={(event) => setOrderFilters((current) => ({ ...current, serverName: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      From
+                      <input
+                        type="date"
+                        value={orderFilters.fromDate}
+                        onChange={(event) => setOrderFilters((current) => ({ ...current, fromDate: event.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      To
+                      <input
+                        type="date"
+                        value={orderFilters.toDate}
+                        onChange={(event) => setOrderFilters((current) => ({ ...current, toDate: event.target.value }))}
+                      />
+                    </label>
+                  </>
+                )}
               </div>
               <div className="filter-actions">
                 <button className="primary-button">Apply</button>
@@ -1245,9 +1356,9 @@ function App() {
             </form>
 
             <div className="metrics">
-              <Metric label="Shown Orders" value={orders.length.toString()} />
-              <Metric label="Shown Active" value={orders.filter((order) => ['pending', 'preparing', 'ready'].includes(order.status)).length.toString()} />
-              <Metric label="Shown Paid" value={formatMoney(orders.filter((order) => order.paymentStatus === 'paid').reduce((sum, order) => sum + (order.paymentTotalCents ?? order.totalCents), 0))} />
+              <Metric label={user.role === 'staff' ? 'Today Orders' : 'Shown Orders'} value={orders.length.toString()} />
+              <Metric label={user.role === 'staff' ? 'Today Active' : 'Shown Active'} value={orders.filter((order) => ['pending', 'preparing', 'ready'].includes(order.status)).length.toString()} />
+              <Metric label={user.role === 'staff' ? 'Today Paid' : 'Shown Paid'} value={formatMoney(orders.filter((order) => order.paymentStatus === 'paid').reduce((sum, order) => sum + (order.paymentTotalCents ?? order.totalCents), 0))} />
             </div>
 
             <div className="order-grid">
@@ -1272,9 +1383,23 @@ function App() {
 
                     <ul>
                       {order.items.map((item) => (
-                        <li key={item.id}>
-                          <span>{item.menuItemName} x {item.quantity}</span>
-                          <span>{formatMoney(item.priceCents * item.quantity)}</span>
+                        <li key={item.id} className="order-item-row">
+                          <div>
+                            <span>{formatOrderItemName(item)}</span>
+                            <small>{formatMoney(item.priceCents * item.quantity)}</small>
+                          </div>
+                          <div className="order-item-controls">
+                            <span className={`status ${item.status}`}>{itemStatusLabels[item.status]}</span>
+                            {getAllowedNextItemStatus(item.status, user.role) && (
+                              <button
+                                disabled={processingItemActionId === `${item.id}:${getAllowedNextItemStatus(item.status, user.role)}`}
+                                onClick={() => handleItemStatusChange(order, item, getAllowedNextItemStatus(item.status, user.role)!)}
+                              >
+                                {getItemActionLabel(item.status, user.role)}
+                              </button>
+                            )}
+                            {!getAllowedNextItemStatus(item.status, user.role) && <span className="item-action-spacer" />}
+                          </div>
                         </li>
                       ))}
                     </ul>
@@ -1298,7 +1423,10 @@ function App() {
                           </button>
                         )}
                         {getAllowedNextStatus(order.status, user.role) && (
-                          <button onClick={() => handleStatusChange(order, getAllowedNextStatus(order.status, user.role)!)}>
+                          <button
+                            disabled={processingOrderActionId === `${order.id}:${getAllowedNextStatus(order.status, user.role)}`}
+                            onClick={() => handleStatusChange(order, getAllowedNextStatus(order.status, user.role)!)}
+                          >
                             {user.role === 'chef' && order.status === 'pending'
                               ? 'Start'
                               : user.role === 'chef' && order.status === 'preparing'
@@ -1307,7 +1435,11 @@ function App() {
                           </button>
                         )}
                         {canCancelOrder(order.status, user.role) && (
-                          <button className="danger-button" onClick={() => handleStatusChange(order, 'cancelled')}>
+                          <button
+                            className="danger-button"
+                            disabled={processingOrderActionId === `${order.id}:cancelled`}
+                            onClick={() => handleStatusChange(order, 'cancelled')}
+                          >
                             Cancel
                           </button>
                         )}
@@ -1704,7 +1836,7 @@ function App() {
               <ul className="receipt-items">
                 {receiptOrder.items.map((item) => (
                   <li key={item.id}>
-                    <span>{item.menuItemName} x {item.quantity}</span>
+                    <span>{formatOrderItemName(item)}</span>
                     <strong>{formatMoney(item.priceCents * item.quantity)}</strong>
                   </li>
                 ))}
@@ -1788,7 +1920,9 @@ function App() {
                 </select>
               </label>
 
-              <button className="primary-button">Confirm Payment</button>
+              <button className="primary-button" disabled={isCheckingOut}>
+                {isCheckingOut ? 'Processing...' : 'Confirm Payment'}
+              </button>
             </form>
           </section>
         </div>
@@ -1811,6 +1945,10 @@ function formatMoney(cents: number) {
     style: 'currency',
     currency: 'USD'
   }).format(cents / 100);
+}
+
+function formatOrderItemName(item: OrderItem) {
+  return item.quantity === 1 ? item.menuItemName : `${item.menuItemName} x ${item.quantity}`;
 }
 
 function dollarsToCents(value: string) {
@@ -1850,6 +1988,13 @@ function getOrderTitle(order: Order) {
   }
 
   return `Table ${order.tableNumber} / ${order.partySize} guests`;
+}
+
+function getSelectedItemsFromOrder(order: Order) {
+  return order.items.reduce<Record<string, number>>((selected, item) => {
+    selected[item.menuItemId] = (selected[item.menuItemId] ?? 0) + item.quantity;
+    return selected;
+  }, {});
 }
 
 function getOrderFlowLabel(
@@ -1919,6 +2064,56 @@ function getAllowedNextStatus(status: OrderStatus, role: UserRole) {
   return undefined;
 }
 
+function getAllowedNextItemStatus(status: OrderItemStatus, role: UserRole) {
+  if (role === 'admin') {
+    return itemNextStatus[status];
+  }
+
+  if (role === 'chef') {
+    if (status === 'pending') {
+      return 'preparing';
+    }
+
+    if (status === 'preparing') {
+      return 'ready';
+    }
+  }
+
+  if (role === 'staff' && status === 'ready') {
+    return 'served';
+  }
+
+  return undefined;
+}
+
+const itemNextStatus: Partial<Record<OrderItemStatus, OrderItemStatus>> = {
+  pending: 'preparing',
+  preparing: 'ready',
+  ready: 'served'
+};
+
+function getItemActionLabel(status: OrderItemStatus, role: UserRole) {
+  const next = getAllowedNextItemStatus(status, role);
+
+  if (!next) {
+    return '';
+  }
+
+  if (role === 'chef' && status === 'pending') {
+    return 'Prepare';
+  }
+
+  if (role === 'chef' && status === 'preparing') {
+    return 'Mark Ready';
+  }
+
+  if (role === 'staff' && status === 'ready') {
+    return 'Served';
+  }
+
+  return itemStatusLabels[next];
+}
+
 function canCancelOrder(status: OrderStatus, role: UserRole) {
   if (role === 'admin') {
     return status !== 'served' && status !== 'cancelled';
@@ -1935,6 +2130,30 @@ function canCheckoutOrder(order: Order, role: UserRole) {
   return (role === 'staff' || role === 'admin') && order.status === 'served' && order.paymentStatus === 'unpaid';
 }
 
+function getDefaultStatusFilter(role?: UserRole, current?: OrderFilterState['status']): OrderFilterState['status'] {
+  if (role === 'staff') {
+    return current && current !== 'all' ? current : 'active';
+  }
+
+  if (role === 'chef') {
+    return current && isKitchenStatus(current) ? current : 'all';
+  }
+
+  return current ?? 'all';
+}
+
+function doesOrderMatchCurrentStatusFilter(order: Order, status: OrderFilterState['status']) {
+  if (status === 'all') {
+    return true;
+  }
+
+  if (status === 'active') {
+    return order.status !== 'cancelled' && order.paymentStatus !== 'paid';
+  }
+
+  return order.status === status;
+}
+
 function getVisibleStatusOptions(role: UserRole) {
   const entries = Object.entries(statusLabels) as Array<[OrderStatus, string]>;
 
@@ -1943,20 +2162,33 @@ function getVisibleStatusOptions(role: UserRole) {
     : entries;
 }
 
-function isKitchenStatus(status: OrderStatus | 'all') {
+function isKitchenStatus(status: OrderStatus | 'all' | 'active') {
   return status === 'all' || status === 'pending' || status === 'preparing';
 }
 
-function toOrderApiFilters(filters: OrderFilterState): OrderFilters {
+function toOrderApiFilters(filters: OrderFilterState, user: User | null): OrderFilters {
+  const isStaffView = user?.role === 'staff';
+  const today = getTodayDateInputValue();
+
   return {
     page: filters.page,
     limit: filters.limit,
-    ...(filters.status !== 'all' ? { status: filters.status } : {}),
+    ...(filters.status !== 'all' && filters.status !== 'active' ? { status: filters.status } : {}),
+    ...(filters.status === 'active' ? { activeOnly: true } : {}),
     ...(filters.tableNumber ? { tableNumber: filters.tableNumber } : {}),
-    ...(filters.serverName ? { serverName: filters.serverName } : {}),
-    ...(filters.fromDate ? { fromDate: filters.fromDate } : {}),
-    ...(filters.toDate ? { toDate: filters.toDate } : {})
+    ...(isStaffView && user ? { serverName: user.name } : filters.serverName ? { serverName: filters.serverName } : {}),
+    ...(isStaffView ? { fromDate: today } : filters.fromDate ? { fromDate: filters.fromDate } : {}),
+    ...(isStaffView ? { toDate: today } : filters.toDate ? { toDate: filters.toDate } : {})
   };
+}
+
+function getTodayDateInputValue() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, '0');
+  const day = String(today.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
 }
 
 export default App;
