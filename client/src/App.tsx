@@ -88,6 +88,8 @@ const tableStatusLabels = {
 const tipPresetOptions = [10, 15, 20];
 const extraChairsAllowed = 2;
 const taxRate = 0.086;
+const protectedDefaultUserEmails = new Set(['admin@example.com', 'staff@example.com', 'chef@example.com']);
+const protectedDefaultTableNames = new Set(Array.from({ length: 12 }, (_, index) => `T${index + 1}`));
 
 type OrderFilterState = Omit<OrderFilters, 'status'> & {
   status: OrderStatus | 'all' | 'active';
@@ -1023,6 +1025,11 @@ function App() {
   }
 
   async function handleStaffActiveChange(staffUser: User, isActive: boolean) {
+    if (isProtectedDefaultUser(staffUser)) {
+      setError('Default demo accounts cannot be deactivated');
+      return;
+    }
+
     try {
       const updated = await updateStaffUser(staffUser.id, { isActive });
       setStaffUsers((current) => current.map((item) => (item.id === updated.id ? updated : item)));
@@ -1033,6 +1040,11 @@ function App() {
   }
 
   async function handleDeleteStaff(staffUser: User) {
+    if (isProtectedDefaultUser(staffUser)) {
+      setError('Default demo accounts cannot be deleted');
+      return;
+    }
+
     const confirmed = window.confirm(`Delete ${staffUser.name}? This action cannot be undone.`);
 
     if (!confirmed) {
@@ -1287,6 +1299,11 @@ function App() {
   }
 
   async function handleDeleteTable(table: RestaurantTable) {
+    if (isProtectedDefaultTable(table)) {
+      setError('Default restaurant tables cannot be deleted');
+      return;
+    }
+
     if (!window.confirm(`Delete ${table.name}? This action cannot be undone.`)) {
       return;
     }
@@ -2291,13 +2308,17 @@ function App() {
                     <option value="occupied">Occupied</option>
                     <option value="needs_cleaning">Needs cleaning</option>
                   </select>
-                  <button
-                    className="danger-button subtle-button"
-                    disabled={table.status === 'occupied'}
-                    onClick={() => handleDeleteTable(table)}
-                  >
-                    Delete
-                  </button>
+                  {isProtectedDefaultTable(table) ? (
+                    <span className="protected-label">Protected</span>
+                  ) : (
+                    <button
+                      className="danger-button subtle-button"
+                      disabled={table.status === 'occupied'}
+                      onClick={() => handleDeleteTable(table)}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </article>
               ))}
             </div>
@@ -2363,21 +2384,27 @@ function App() {
                     <option value="admin">Admin</option>
                     <option value="chef">Chef</option>
                   </select>
-                  <label className="toggle-label">
-                    <input
-                      type="checkbox"
-                      checked={staffUser.isActive}
-                      onChange={(event) => handleStaffActiveChange(staffUser, event.target.checked)}
-                    />
-                    Active
-                  </label>
-                  <button
-                    className="danger-button subtle-button"
-                    disabled={staffUser.id === user.id}
-                    onClick={() => handleDeleteStaff(staffUser)}
-                  >
-                    Delete
-                  </button>
+                  {isProtectedDefaultUser(staffUser) ? (
+                    <span className="protected-label">Protected</span>
+                  ) : (
+                    <>
+                      <label className="toggle-label">
+                        <input
+                          type="checkbox"
+                          checked={staffUser.isActive}
+                          onChange={(event) => handleStaffActiveChange(staffUser, event.target.checked)}
+                        />
+                        Active
+                      </label>
+                      <button
+                        className="danger-button subtle-button"
+                        disabled={staffUser.id === user.id}
+                        onClick={() => handleDeleteStaff(staffUser)}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </article>
               ))}
             </div>
@@ -2722,6 +2749,14 @@ function centsToDollarsInput(cents: number) {
 
 function compareMenuItems(left: MenuItem, right: MenuItem) {
   return left.category.localeCompare(right.category) || left.name.localeCompare(right.name);
+}
+
+function isProtectedDefaultUser(user: User) {
+  return protectedDefaultUserEmails.has(user.email);
+}
+
+function isProtectedDefaultTable(table: RestaurantTable) {
+  return protectedDefaultTableNames.has(table.name);
 }
 
 function compareMenuBundles(left: MenuBundle, right: MenuBundle) {

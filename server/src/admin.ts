@@ -6,6 +6,7 @@ import { hashPassword } from './passwords.js';
 import type { User, UserRole } from './types.js';
 
 const router = Router();
+const protectedUserEmails = new Set(['admin@example.com', 'staff@example.com', 'chef@example.com']);
 
 router.use(requireAuth, requireRole('admin'));
 
@@ -84,10 +85,15 @@ router.patch('/staff/:id', async (req, res, next) => {
   }
 
   try {
-    const current = await query<{ id: string }>('SELECT id FROM users WHERE id = $1', [req.params.id]);
+    const current = await query<{ id: string; email: string }>('SELECT id, email FROM users WHERE id = $1', [req.params.id]);
 
     if (current.rowCount === 0) {
       res.status(404).json({ message: 'Staff user not found' });
+      return;
+    }
+
+    if (parsed.data.isActive === false && protectedUserEmails.has(current.rows[0].email)) {
+      res.status(403).json({ message: 'Default demo accounts cannot be deactivated' });
       return;
     }
 
@@ -124,13 +130,19 @@ router.delete('/staff/:id', async (req, res, next) => {
   }
 
   try {
-    const result = await query('DELETE FROM users WHERE id = $1', [req.params.id]);
+    const result = await query<{ email: string }>('SELECT email FROM users WHERE id = $1', [req.params.id]);
 
     if (result.rowCount === 0) {
       res.status(404).json({ message: 'Staff user not found' });
       return;
     }
 
+    if (protectedUserEmails.has(result.rows[0].email)) {
+      res.status(403).json({ message: 'Default demo accounts cannot be deleted' });
+      return;
+    }
+
+    await query('DELETE FROM users WHERE id = $1', [req.params.id]);
     res.status(204).send();
   } catch (error) {
     next(error);

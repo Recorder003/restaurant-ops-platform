@@ -60,6 +60,43 @@ async function runApiTests() {
 
   const { response: menuResponse, body: menu } = await request('/menu-items');
   assert(menuResponse.status === 200 && menu.length > 0, 'Public menu should load');
+  const staffList = await request('/admin/staff', { token: admin });
+  assert(staffList.response.status === 200, 'Admin should fetch staff users');
+  const staffUser = staffList.body.find((user) => user.email === 'staff@example.com');
+  assert(staffUser, 'Seed staff user should exist');
+  const inactiveStaff = await request(`/admin/staff/${staffUser.id}`, {
+    method: 'PATCH',
+    token: admin,
+    body: { isActive: false }
+  });
+  assert(inactiveStaff.response.status === 403, 'User accounts should not be deactivated');
+  const deletedStaff = await request(`/admin/staff/${staffUser.id}`, {
+    method: 'DELETE',
+    token: admin
+  });
+  assert(deletedStaff.response.status === 403, 'User accounts should not be deleted');
+  const temporaryStaff = await request('/admin/staff', {
+    method: 'POST',
+    token: admin,
+    body: {
+      name: 'Temporary Staff',
+      email: 'temporary-staff@example.com',
+      password: 'Temp12345!',
+      role: 'staff'
+    }
+  });
+  assert(temporaryStaff.response.status === 201, 'Admin should create a temporary staff user');
+  const inactiveTemporaryStaff = await request(`/admin/staff/${temporaryStaff.body.id}`, {
+    method: 'PATCH',
+    token: admin,
+    body: { isActive: false }
+  });
+  assert(inactiveTemporaryStaff.response.status === 200 && inactiveTemporaryStaff.body.isActive === false, 'Admin should deactivate added staff users');
+  const deletedTemporaryStaff = await request(`/admin/staff/${temporaryStaff.body.id}`, {
+    method: 'DELETE',
+    token: admin
+  });
+  assert(deletedTemporaryStaff.response.status === 204, 'Admin should delete added staff users');
   const { response: bundleResponse, body: bundles } = await request('/menu-items/bundles');
   assert(bundleResponse.status === 200 && bundles.length > 0, 'Public menu bundles should load');
   const lunchCombo = bundles.find((bundle) => bundle.name === 'Lunch Combo') ?? bundles[0];
@@ -75,6 +112,11 @@ async function runApiTests() {
   const largeVariant = variantMenuItem.variants.find((variant) => variant.name === 'Large');
   assert(smallVariant && largeVariant, 'Seeded menu variants should include Small and Large');
   const drinkVariant = drinkItem.variants.find((variant) => variant.isDefault) ?? drinkItem.variants[0];
+  const deletedMenuItem = await request(`/menu-items/${menuItem.id}`, {
+    method: 'DELETE',
+    token: admin
+  });
+  assert(deletedMenuItem.response.status === 403, 'Menu items should not be deleted');
 
   const adminBundles = await request('/menu-items/bundles/admin', { token: admin });
   assert(adminBundles.response.status === 200 && adminBundles.body.some((bundle) => bundle.id === lunchCombo.id), 'Admin should fetch all menu bundles');
@@ -132,6 +174,11 @@ async function runApiTests() {
   });
   assert(updatedAdminBundle.response.status === 200, 'Admin should update a menu bundle');
   assert(updatedAdminBundle.body.priceCents === 1299 && updatedAdminBundle.body.items.length === 1, 'Updated menu bundle should keep new price and components');
+  const deletedBundle = await request(`/menu-items/bundles/${createdBundle.body.id}`, {
+    method: 'DELETE',
+    token: admin
+  });
+  assert(deletedBundle.response.status === 403, 'Menu bundles should not be deleted');
 
   const activeOrdersAfterBundleUpdate = await request('/orders?page=1&limit=100', { token: admin });
   const persistedBundleOrder = activeOrdersAfterBundleUpdate.body.orders.find((order) => order.id === createdBundleOrder.body.id);
@@ -495,6 +542,22 @@ async function runApiTests() {
   let t1 = findTable(tables, 'T1');
   const t2 = findTable(tables, 'T2');
   const t3 = findTable(tables, 'T3');
+  const deletedTable = await request(`/tables/${t3.id}`, {
+    method: 'DELETE',
+    token: admin
+  });
+  assert(deletedTable.response.status === 403, 'Default restaurant tables should not be deleted');
+  const temporaryTable = await request('/tables', {
+    method: 'POST',
+    token: admin,
+    body: { name: 'T99', capacity: 2 }
+  });
+  assert(temporaryTable.response.status === 201, 'Admin should create a temporary table');
+  const deletedTemporaryTable = await request(`/tables/${temporaryTable.body.id}`, {
+    method: 'DELETE',
+    token: admin
+  });
+  assert(deletedTemporaryTable.response.status === 204, 'Admin should delete added tables');
   const realtime = await createRealtimeWaiter(staff, (event) => event.type === 'order_changed' && event.action === 'created');
 
   const created = await request('/orders', {
@@ -711,6 +774,7 @@ async function runApiTests() {
       'table occupancy',
       'capacity limits',
       'role boundaries',
+      'destructive action guards',
       'status transitions',
       'item-level kitchen workflow',
       'split quantity item tracking',

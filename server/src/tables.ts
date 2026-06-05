@@ -6,6 +6,7 @@ import { broadcastRealtimeEvent } from './realtime.js';
 import type { RestaurantTable, TableStatus } from './types.js';
 
 const router = Router();
+const protectedTableNames = new Set(Array.from({ length: 12 }, (_, index) => `T${index + 1}`));
 
 router.use(requireAuth);
 
@@ -155,16 +156,27 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
 
 router.delete('/:id', requireRole('admin'), async (req, res, next) => {
   try {
-    const { rowCount } = await query(
-      'DELETE FROM restaurant_tables WHERE id = $1 AND status != $2',
-      [req.params.id, 'occupied']
+    const { rows, rowCount } = await query<{ name: string; status: TableStatus }>(
+      'SELECT name, status FROM restaurant_tables WHERE id = $1',
+      [req.params.id]
     );
 
     if (rowCount === 0) {
-      res.status(409).json({ message: 'Table not found or currently occupied' });
+      res.status(404).json({ message: 'Table not found' });
       return;
     }
 
+    if (protectedTableNames.has(rows[0].name)) {
+      res.status(403).json({ message: 'Default restaurant tables cannot be deleted' });
+      return;
+    }
+
+    if (rows[0].status === 'occupied') {
+      res.status(409).json({ message: 'Occupied tables cannot be deleted' });
+      return;
+    }
+
+    await query('DELETE FROM restaurant_tables WHERE id = $1', [req.params.id]);
     broadcastRealtimeEvent({ type: 'table_changed', action: 'deleted', resourceId: String(req.params.id) });
     res.status(204).end();
   } catch (error) {

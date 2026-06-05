@@ -804,7 +804,18 @@ textarea {
 }
 
 .table-admin-row {
-  grid-template-columns: 1fr 140px 180px auto;
+  grid-template-columns: 1fr 140px 180px 120px;
+}
+
+.staff-row {
+  grid-template-columns: 1fr 140px 120px 120px;
+}
+
+.protected-label {
+  color: #6b7280;
+  font-size: 0.82rem;
+  font-weight: 800;
+  justify-self: start;
 }
 
 .sold-out-panel {

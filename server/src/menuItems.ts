@@ -247,6 +247,21 @@ router.patch('/bundles/:id/sold-out', requireAuth, requireRole('admin'), async (
   }
 });
 
+router.delete('/bundles/:id', requireAuth, requireRole('staff', 'admin', 'chef'), async (req, res, next) => {
+  try {
+    const { rowCount } = await query('SELECT id FROM menu_bundles WHERE id = $1', [req.params.id]);
+
+    if (rowCount === 0) {
+      res.status(404).json({ message: 'Menu bundle not found' });
+      return;
+    }
+
+    res.status(403).json({ message: 'Menu bundles cannot be deleted' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/', requireAuth, requireRole('admin'), async (req, res, next) => {
   const parsed = menuItemSchema.safeParse(req.body);
 
@@ -368,6 +383,21 @@ router.patch('/:id/sold-out', requireAuth, requireRole('admin', 'chef'), async (
     const menuItem = await getMenuItemById(rows[0].id);
     broadcastRealtimeEvent({ type: 'menu_changed', action: 'sold_out_updated', resourceId: menuItem.id });
     res.json(menuItem);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/:id', requireAuth, requireRole('staff', 'admin', 'chef'), async (req, res, next) => {
+  try {
+    const { rowCount } = await query('SELECT id FROM menu_items WHERE id = $1', [req.params.id]);
+
+    if (rowCount === 0) {
+      res.status(404).json({ message: 'Menu item not found' });
+      return;
+    }
+
+    res.status(403).json({ message: 'Menu items cannot be deleted' });
   } catch (error) {
     next(error);
   }

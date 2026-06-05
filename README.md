@@ -108,9 +108,8 @@ Admins can manage menu items, staff roles, restaurant settings, and view order h
 
 ### Deployment
 
-- Vercel or Netlify for frontend
-- Render, Railway, or AWS for backend
-- Managed PostgreSQL database
+- AWS deployment target: S3, CloudFront, Elastic Beanstalk, and RDS PostgreSQL
+- Environment-based frontend/API configuration
 - GitHub Actions for CI checks
 
 ## High-Level Architecture
@@ -151,6 +150,18 @@ Detailed planning documents are available in the docs folder:
 
 ## Local Development
 
+Copy the example environment file before running the app locally:
+
+```bash
+cp .env.example .env
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
 Start the project from VS Code with `Terminal > Run Task > Start project`.
 
 That task starts the Docker PostgreSQL container, runs pending database migrations, and starts both the API and Vite client.
@@ -171,7 +182,27 @@ npm run start
 
 The API exposes `GET /api/health`, which checks both the server process and PostgreSQL connection.
 
-Deployment notes and required environment variables are documented in `docs/deployment.md`.
+Deployment notes, AWS architecture, and required environment variables are documented in `docs/deployment.md`.
+
+## Deployment Preview Plan
+
+The intended public-demo deployment is:
+
+```txt
+React/Vite client -> S3 static hosting -> CloudFront HTTPS URL
+Express API       -> Elastic Beanstalk Node.js environment
+PostgreSQL        -> Amazon RDS PostgreSQL
+```
+
+The frontend uses `VITE_API_URL` at build time to call the hosted API. The backend uses `DATABASE_URL`, `CLIENT_ORIGIN`, and `AUTH_TOKEN_SECRET` from the hosting environment.
+
+For an HR-facing demo, seed accounts are available after database migration:
+
+- `admin@example.com / Admin123!`
+- `staff@example.com / Staff123!`
+- `chef@example.com / Chef123!`
+
+Do not reuse development secrets in production. Generate a new `AUTH_TOKEN_SECRET` before deploying.
 
 ## Testing
 
@@ -222,12 +253,10 @@ The CI workflow uses a PostgreSQL service container and sets `SKIP_DOCKER_POSTGR
 
 Potential future improvements include:
 
-- Real-time order updates using WebSocket or Server-Sent Events
 - Stripe test-mode payment integration
-- Dockerized local development
 - Admin analytics dashboard
 - Audit logs for staff/admin actions
-- End-to-end tests with Playwright
 - Multi-restaurant support
+- AWS production deployment with S3, CloudFront, Elastic Beanstalk, and RDS
 
 Author
