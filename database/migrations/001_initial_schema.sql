@@ -74,17 +74,12 @@ CREATE TABLE order_items (
   order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
   menu_item_id UUID NOT NULL REFERENCES menu_items(id),
   quantity INTEGER NOT NULL CHECK (quantity > 0),
-  price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'preparing', 'ready', 'served')),
-  prepared_at TIMESTAMPTZ,
-  served_at TIMESTAMPTZ
+  price_cents INTEGER NOT NULL CHECK (price_cents >= 0)
 );
 
 CREATE INDEX idx_orders_status ON orders(status);
 CREATE INDEX idx_orders_created_at ON orders(created_at DESC);
 CREATE INDEX idx_order_items_order_id ON order_items(order_id);
-CREATE INDEX idx_order_items_status ON order_items(status);
 CREATE INDEX idx_order_events_order_id ON order_events(order_id);
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_restaurant_tables_status ON restaurant_tables(status);

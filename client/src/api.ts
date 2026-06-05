@@ -1,6 +1,7 @@
 import type {
   DraftItem,
   FulfillmentType,
+  MenuBundle,
   MenuItem,
   Order,
   OrderEvent,
@@ -65,6 +66,16 @@ export async function fetchCurrentUser(): Promise<User> {
 
 export async function fetchMenuItems(): Promise<MenuItem[]> {
   return request('/menu-items');
+}
+
+export async function fetchMenuBundles(): Promise<MenuBundle[]> {
+  return request('/menu-items/bundles');
+}
+
+export async function fetchAdminMenuBundles(): Promise<MenuBundle[]> {
+  return request('/menu-items/bundles/admin', {
+    token: getStoredToken()
+  });
 }
 
 export async function fetchAdminMenuItems(): Promise<MenuItem[]> {
@@ -214,6 +225,42 @@ export async function updateMenuItemSoldOut(id: string, isSoldOut: boolean): Pro
   });
 }
 
+export async function createMenuBundle(input: {
+  name: string;
+  priceCents: number;
+  isAvailable: boolean;
+  isSoldOut: boolean;
+  items: Array<{ menuItemVariantId: string; quantity: number }>;
+}): Promise<MenuBundle> {
+  return request('/menu-items/bundles', {
+    method: 'POST',
+    token: getStoredToken(),
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updateMenuBundle(id: string, input: Partial<{
+  name: string;
+  priceCents: number;
+  isAvailable: boolean;
+  isSoldOut: boolean;
+  items: Array<{ menuItemVariantId: string; quantity: number }>;
+}>): Promise<MenuBundle> {
+  return request(`/menu-items/bundles/${id}`, {
+    method: 'PATCH',
+    token: getStoredToken(),
+    body: JSON.stringify(input)
+  });
+}
+
+export async function updateMenuBundleSoldOut(id: string, isSoldOut: boolean): Promise<MenuBundle> {
+  return request(`/menu-items/bundles/${id}/sold-out`, {
+    method: 'PATCH',
+    token: getStoredToken(),
+    body: JSON.stringify({ isSoldOut })
+  });
+}
+
 export async function createOrder(input: {
   orderSource: OrderSource;
   fulfillmentType: FulfillmentType;
@@ -266,6 +313,7 @@ export async function updateOrderItemStatus(orderId: string, itemId: string, sta
 
 export async function checkoutOrder(id: string, input: {
   paymentMethod: PaymentMethod;
+  orderItemIds?: string[];
   subtotalCents: number;
   taxCents: number;
   tipCents: number;

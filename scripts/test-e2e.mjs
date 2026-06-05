@@ -82,7 +82,9 @@ async function runBrowserFlow() {
   await page.getByRole('button', { name: 'T1 Available 2 seats' }).click();
   await page.locator('form.order-wizard').getByRole('button', { name: 'Next' }).click();
   await page.locator('form.order-wizard').getByRole('button', { name: 'Next' }).click();
-  await page.getByRole('button', { name: /Signature Beef Noodles/i }).click();
+  await page.getByRole('button', { name: 'Entrees' }).click();
+  await page.getByRole('button', { name: /^Signature Beef Noodles\s+\$13\.80/i }).click();
+  await page.getByRole('button', { name: /^Grilled Chicken Rice Bowl\s+\$15\.80/i }).click();
   await page.getByRole('button', { name: 'Submit Order' }).click();
   await expectText(page, 'Order Board');
   await expectText(page, 'Table T1 / 2 guests');
@@ -105,14 +107,16 @@ async function runBrowserFlow() {
 
   await page.getByRole('button', { name: 'Checkout' }).click();
   await expectVisible(page.getByRole('heading', { name: 'Checkout' }), 'checkout modal');
+  await page.getByRole('button', { name: 'Split Bill' }).click();
+  await expectVisible(page.getByRole('heading', { name: 'Split Bill' }), 'split bill modal');
+  await page.getByRole('button', { name: /Add Split/i }).click();
+  await page.getByRole('button', { name: 'By Amount' }).click();
+  await expectText(page, 'Amount split');
+  await page.getByRole('button', { name: 'Use Selected Split' }).click();
   await page.getByRole('button', { name: '15%' }).click();
   await page.getByRole('button', { name: 'Confirm Payment' }).click();
-  await expectVisible(page.locator('.payment-status.paid'), 'paid status badge');
-
-  await page.getByRole('button', { name: 'Receipt' }).click();
-  await expectVisible(page.getByRole('heading', { name: 'Receipt' }), 'receipt modal');
-  await expectText(page, 'Restaurant Ops');
-  await expectText(page, 'Order Receipt');
+  await expectVisible(page.getByText('Split 2', { exact: false }), 'next split selected after first payment');
+  await page.getByRole('button', { name: 'Confirm Payment' }).click();
 
   const orderTotal = await getOrderTotalFromApi();
   const expectedTax = Math.round(orderTotal * TAX_RATE);

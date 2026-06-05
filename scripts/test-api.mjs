@@ -60,8 +60,141 @@ async function runApiTests() {
 
   const { response: menuResponse, body: menu } = await request('/menu-items');
   assert(menuResponse.status === 200 && menu.length > 0, 'Public menu should load');
-  const menuItem = menu[0];
-  const secondMenuItem = menu[1] ?? menuItem;
+  const { response: bundleResponse, body: bundles } = await request('/menu-items/bundles');
+  assert(bundleResponse.status === 200 && bundles.length > 0, 'Public menu bundles should load');
+  const lunchCombo = bundles.find((bundle) => bundle.name === 'Lunch Combo') ?? bundles[0];
+  const drinkItem = menu.find((item) => item.category === 'Drinks');
+  assert(drinkItem, 'Seed menu should include a drink item');
+  const kitchenItems = menu.filter((item) => item.category !== 'Drinks');
+  assert(kitchenItems.length > 0, 'Seed menu should include kitchen items');
+  const menuItem = kitchenItems[0];
+  const secondMenuItem = kitchenItems[1] ?? menuItem;
+  const variantMenuItem = menu.find((item) => item.name === 'Signature Beef Noodles');
+  assert(variantMenuItem?.variants.length >= 3, 'Signature Beef Noodles should include Regular, Small, and Large variants');
+  const smallVariant = variantMenuItem.variants.find((variant) => variant.name === 'Small');
+  const largeVariant = variantMenuItem.variants.find((variant) => variant.name === 'Large');
+  assert(smallVariant && largeVariant, 'Seeded menu variants should include Small and Large');
+  const drinkVariant = drinkItem.variants.find((variant) => variant.isDefault) ?? drinkItem.variants[0];
+
+  const adminBundles = await request('/menu-items/bundles/admin', { token: admin });
+  assert(adminBundles.response.status === 200 && adminBundles.body.some((bundle) => bundle.id === lunchCombo.id), 'Admin should fetch all menu bundles');
+  const staffBundleCreate = await request('/menu-items/bundles', {
+    method: 'POST',
+    token: staff,
+    body: {
+      name: 'Staff Combo',
+      priceCents: 999,
+      isAvailable: true,
+      isSoldOut: false,
+      items: [{ menuItemVariantId: smallVariant.id, quantity: 1 }]
+    }
+  });
+  assert(staffBundleCreate.response.status === 403, 'Staff should not create menu bundles');
+
+  const createdBundle = await request('/menu-items/bundles', {
+    method: 'POST',
+    token: admin,
+    body: {
+      name: 'Test Combo',
+      priceCents: 999,
+      isAvailable: true,
+      isSoldOut: false,
+      items: [
+        { menuItemVariantId: smallVariant.id, quantity: 1 },
+        { menuItemVariantId: drinkVariant.id, quantity: 1 }
+      ]
+    }
+  });
+  assert(createdBundle.response.status === 201, 'Admin should create a menu bundle');
+  assert(createdBundle.body.items.length === 2, 'Created menu bundle should include configured components');
+
+  const createdBundleOrder = await request('/orders', {
+    method: 'POST',
+    token: staff,
+    body: {
+      orderSource: 'in_person',
+      fulfillmentType: 'to_go',
+      serverName: 'Kent',
+      items: [{ bundleId: createdBundle.body.id, quantity: 1 }]
+    }
+  });
+  assert(createdBundleOrder.response.status === 201, 'Order should use an admin-created bundle');
+  assert(createdBundleOrder.body.totalCents === 999, 'Admin-created bundle order should use the configured bundle price');
+
+  const updatedAdminBundle = await request(`/menu-items/bundles/${createdBundle.body.id}`, {
+    method: 'PATCH',
+    token: admin,
+    body: {
+      name: 'Updated Test Combo',
+      priceCents: 1299,
+      items: [{ menuItemVariantId: smallVariant.id, quantity: 2 }]
+    }
+  });
+  assert(updatedAdminBundle.response.status === 200, 'Admin should update a menu bundle');
+  assert(updatedAdminBundle.body.priceCents === 1299 && updatedAdminBundle.body.items.length === 1, 'Updated menu bundle should keep new price and components');
+
+  const activeOrdersAfterBundleUpdate = await request('/orders?page=1&limit=100', { token: admin });
+  const persistedBundleOrder = activeOrdersAfterBundleUpdate.body.orders.find((order) => order.id === createdBundleOrder.body.id);
+  assert(persistedBundleOrder?.totalCents === 999, 'Existing orders should keep the original bundle price after bundle updates');
+
+  const soldOutBundle = await request(`/menu-items/bundles/${createdBundle.body.id}/sold-out`, {
+    method: 'PATCH',
+    token: admin,
+    body: { isSoldOut: true }
+  });
+  assert(soldOutBundle.response.status === 200 && soldOutBundle.body.isSoldOut === true, 'Admin should mark a menu bundle sold out');
+  const publicBundlesAfterSoldOut = await request('/menu-items/bundles');
+  assert(!publicBundlesAfterSoldOut.body.some((bundle) => bundle.id === createdBundle.body.id), 'Sold-out menu bundles should be hidden from public ordering');
+
+  const variantOrder = await request('/orders', {
+    method: 'POST',
+    token: staff,
+    body: {
+      orderSource: 'in_person',
+      fulfillmentType: 'to_go',
+      serverName: 'Kent',
+      items: [
+        { menuItemId: variantMenuItem.id, menuItemVariantId: smallVariant.id, quantity: 1 },
+        { menuItemId: variantMenuItem.id, menuItemVariantId: largeVariant.id, quantity: 1 }
+      ]
+    }
+  });
+  assert(variantOrder.response.status === 201, 'Order with menu item variants should be created');
+  assert(variantOrder.body.totalCents === smallVariant.priceCents + largeVariant.priceCents, 'Variant prices should determine order total');
+  assert(
+    variantOrder.body.items.some((item) => item.variantName === 'Small')
+      && variantOrder.body.items.some((item) => item.variantName === 'Large'),
+    'Created order should preserve each selected variant name'
+  );
+
+  const bundleOrder = await request('/orders', {
+    method: 'POST',
+    token: staff,
+    body: {
+      orderSource: 'in_person',
+      fulfillmentType: 'to_go',
+      serverName: 'Kent',
+      items: [{ bundleId: lunchCombo.id, quantity: 1 }]
+    }
+  });
+  assert(bundleOrder.response.status === 201, 'Order with a menu bundle should be created');
+  assert(bundleOrder.body.totalCents === lunchCombo.priceCents, 'Bundle order total should use the discounted bundle price');
+  assert(bundleOrder.body.items.length === lunchCombo.items.reduce((sum, item) => sum + item.quantity, 0), 'Bundle should expand into component order items');
+  assert(bundleOrder.body.items.every((item) => item.bundleName === lunchCombo.name), 'Bundle component items should keep bundle context');
+
+  const updatedBundleOrder = await request(`/orders/${bundleOrder.body.id}`, {
+    method: 'PATCH',
+    token: staff,
+    body: {
+      orderSource: 'in_person',
+      fulfillmentType: 'to_go',
+      serverName: 'Kent',
+      items: [{ bundleId: lunchCombo.id, quantity: 1 }]
+    }
+  });
+  assert(updatedBundleOrder.response.status === 200, 'Bundle order should be editable as a bundle');
+  assert(updatedBundleOrder.body.totalCents === lunchCombo.priceCents, 'Edited bundle order should keep the discounted bundle price');
+  assert(updatedBundleOrder.body.items.every((item) => item.bundleName === lunchCombo.name), 'Edited bundle order should keep bundle context');
 
   const itemWorkflowOrder = await request('/orders', {
     method: 'POST',
@@ -153,6 +286,209 @@ async function runApiTests() {
     body: { status: 'cancelled' }
   });
   assert(cancelledSplitQuantityOrder.response.status === 200, 'Admin should cancel split quantity test order');
+
+  const splitPaymentOrder = await request('/orders', {
+    method: 'POST',
+    token: staff,
+    body: {
+      orderSource: 'in_person',
+      fulfillmentType: 'to_go',
+      serverName: 'Kent',
+      items: [
+        { menuItemId: menuItem.id, quantity: 1 },
+        { menuItemId: secondMenuItem.id, quantity: 1 }
+      ]
+    }
+  });
+  assert(splitPaymentOrder.response.status === 201, 'Split payment order should be created');
+
+  const splitPaymentPreparing = await request(`/orders/${splitPaymentOrder.body.id}/status`, {
+    method: 'PATCH',
+    token: admin,
+    body: { status: 'preparing' }
+  });
+  assert(splitPaymentPreparing.response.status === 200, 'Admin should prepare split payment order');
+
+  const splitPaymentReady = await request(`/orders/${splitPaymentOrder.body.id}/status`, {
+    method: 'PATCH',
+    token: admin,
+    body: { status: 'ready' }
+  });
+  assert(splitPaymentReady.response.status === 200, 'Admin should ready split payment order');
+
+  const splitPaymentServed = await request(`/orders/${splitPaymentOrder.body.id}/status`, {
+    method: 'PATCH',
+    token: admin,
+    body: { status: 'served' }
+  });
+  assert(splitPaymentServed.response.status === 200, 'Admin should serve split payment order');
+
+  const firstPaymentItem = splitPaymentServed.body.items[0];
+  const secondPaymentItem = splitPaymentServed.body.items[1];
+  const firstSplitTax = Math.round(firstPaymentItem.priceCents * TAX_RATE);
+  const firstSplitPayment = await request(`/orders/${splitPaymentOrder.body.id}/checkout`, {
+    method: 'POST',
+    token: staff,
+    body: {
+      paymentMethod: 'card',
+      orderItemIds: [firstPaymentItem.id],
+      subtotalCents: firstPaymentItem.priceCents,
+      taxCents: firstSplitTax,
+      tipCents: 100,
+      totalCents: firstPaymentItem.priceCents + firstSplitTax + 100
+    }
+  });
+  assert(firstSplitPayment.response.status === 200, 'First split payment should be recorded');
+  assert(firstSplitPayment.body.paymentStatus === 'partially_paid', 'Order should be partially paid after one item is checked out');
+  assert(firstSplitPayment.body.items.find((item) => item.id === firstPaymentItem.id).paymentId, 'Paid item should carry a payment id');
+  assert(!firstSplitPayment.body.items.find((item) => item.id === secondPaymentItem.id).paymentId, 'Unpaid item should remain unassigned');
+
+  const duplicateSplitItemPayment = await request(`/orders/${splitPaymentOrder.body.id}/checkout`, {
+    method: 'POST',
+    token: staff,
+    body: {
+      paymentMethod: 'cash',
+      orderItemIds: [firstPaymentItem.id],
+      subtotalCents: firstPaymentItem.priceCents,
+      taxCents: firstSplitTax,
+      tipCents: 0,
+      totalCents: firstPaymentItem.priceCents + firstSplitTax
+    }
+  });
+  assert(duplicateSplitItemPayment.response.status === 409, 'Already paid split item should not be charged twice');
+
+  const secondSplitTax = Math.round(secondPaymentItem.priceCents * TAX_RATE);
+  const finalSplitPayment = await request(`/orders/${splitPaymentOrder.body.id}/checkout`, {
+    method: 'POST',
+    token: staff,
+    body: {
+      paymentMethod: 'cash',
+      orderItemIds: [secondPaymentItem.id],
+      subtotalCents: secondPaymentItem.priceCents,
+      taxCents: secondSplitTax,
+      tipCents: 0,
+      totalCents: secondPaymentItem.priceCents + secondSplitTax
+    }
+  });
+  assert(finalSplitPayment.response.status === 200, 'Final split payment should be recorded');
+  assert(finalSplitPayment.body.paymentStatus === 'paid', 'Order should be paid after all items are checked out');
+  assert(finalSplitPayment.body.payments.length === 2, 'Order should retain both split payment records');
+
+  const amountSplitOrder = await request('/orders', {
+    method: 'POST',
+    token: staff,
+    body: {
+      orderSource: 'in_person',
+      fulfillmentType: 'to_go',
+      serverName: 'Kent',
+      items: [
+        { menuItemId: menuItem.id, quantity: 1 },
+        { menuItemId: secondMenuItem.id, quantity: 1 }
+      ]
+    }
+  });
+  assert(amountSplitOrder.response.status === 201, 'Amount split order should be created');
+  await request(`/orders/${amountSplitOrder.body.id}/status`, { method: 'PATCH', token: admin, body: { status: 'preparing' } });
+  await request(`/orders/${amountSplitOrder.body.id}/status`, { method: 'PATCH', token: admin, body: { status: 'ready' } });
+  const amountSplitServed = await request(`/orders/${amountSplitOrder.body.id}/status`, {
+    method: 'PATCH',
+    token: admin,
+    body: { status: 'served' }
+  });
+  assert(amountSplitServed.response.status === 200, 'Admin should serve amount split order');
+
+  const firstAmountSubtotal = Math.floor(amountSplitServed.body.totalCents / 2);
+  const secondAmountSubtotal = amountSplitServed.body.totalCents - firstAmountSubtotal;
+  const firstAmountTax = Math.round(firstAmountSubtotal * TAX_RATE);
+  const firstAmountPayment = await request(`/orders/${amountSplitOrder.body.id}/checkout`, {
+    method: 'POST',
+    token: staff,
+    body: {
+      paymentMethod: 'card',
+      subtotalCents: firstAmountSubtotal,
+      taxCents: firstAmountTax,
+      tipCents: 0,
+      totalCents: firstAmountSubtotal + firstAmountTax
+    }
+  });
+  assert(firstAmountPayment.response.status === 200, 'First amount split payment should be recorded');
+  assert(firstAmountPayment.body.paymentStatus === 'partially_paid', 'Amount split order should be partially paid after first payment');
+
+  const secondAmountTax = Math.round(secondAmountSubtotal * TAX_RATE);
+  const secondAmountPayment = await request(`/orders/${amountSplitOrder.body.id}/checkout`, {
+    method: 'POST',
+    token: staff,
+    body: {
+      paymentMethod: 'cash',
+      subtotalCents: secondAmountSubtotal,
+      taxCents: secondAmountTax,
+      tipCents: 0,
+      totalCents: secondAmountSubtotal + secondAmountTax
+    }
+  });
+  assert(secondAmountPayment.response.status === 200, 'Final amount split payment should be recorded');
+  assert(secondAmountPayment.body.paymentStatus === 'paid', 'Amount split order should be paid when subtotal balance is covered');
+  assert(secondAmountPayment.body.payments.length === 2, 'Amount split order should retain both payment records');
+
+  const legacyQuantityOrder = await createLegacyQuantityOrder(menuItem);
+  const legacyTax = Math.round(legacyQuantityOrder.subtotalCents * TAX_RATE);
+  const legacyQuantityCheckout = await request(`/orders/${legacyQuantityOrder.orderId}/checkout`, {
+    method: 'POST',
+    token: staff,
+    body: {
+      paymentMethod: 'card',
+      orderItemIds: [legacyQuantityOrder.itemId],
+      subtotalCents: legacyQuantityOrder.subtotalCents,
+      taxCents: legacyTax,
+      tipCents: 0,
+      totalCents: legacyQuantityOrder.subtotalCents + legacyTax
+    }
+  });
+  assert(legacyQuantityCheckout.response.status === 200, 'Legacy quantity order item should checkout successfully');
+  assert(legacyQuantityCheckout.body.paymentStatus === 'paid', 'Legacy quantity order should be paid after checkout');
+
+  const drinkOnlyOrder = await request('/orders', {
+    method: 'POST',
+    token: staff,
+    body: {
+      orderSource: 'in_person',
+      fulfillmentType: 'to_go',
+      serverName: 'Kent',
+      items: [{ menuItemId: drinkItem.id, quantity: 1 }]
+    }
+  });
+  assert(drinkOnlyOrder.response.status === 201, 'Drink-only order should be created');
+  const drinkOrderItem = drinkOnlyOrder.body.items[0];
+  assert(drinkOrderItem.isKitchenItem === false, 'Drink item should not require kitchen preparation');
+
+  const chefOrdersWithDrinkOnly = await request('/orders?page=1&limit=100', { token: chef });
+  assert(
+    chefOrdersWithDrinkOnly.response.status === 200
+      && !chefOrdersWithDrinkOnly.body.orders.some((candidate) => candidate.id === drinkOnlyOrder.body.id),
+    'Chef board should not include drink-only orders'
+  );
+
+  const servedDrink = await request(`/orders/${drinkOnlyOrder.body.id}/items/${drinkOrderItem.id}/status`, {
+    method: 'PATCH',
+    token: staff,
+    body: { status: 'served' }
+  });
+  assert(servedDrink.response.status === 200, 'Staff should serve a drink without kitchen preparation');
+  assert(servedDrink.body.status === 'served', 'Drink-only order should become served after staff serves the drink');
+
+  const drinkOrderCheckoutTax = Math.round(servedDrink.body.totalCents * TAX_RATE);
+  const paidDrinkOrder = await request(`/orders/${drinkOnlyOrder.body.id}/checkout`, {
+    method: 'POST',
+    token: staff,
+    body: {
+      paymentMethod: 'cash',
+      subtotalCents: servedDrink.body.totalCents,
+      taxCents: drinkOrderCheckoutTax,
+      tipCents: 0,
+      totalCents: servedDrink.body.totalCents + drinkOrderCheckoutTax
+    }
+  });
+  assert(paidDrinkOrder.response.status === 200, 'Staff should checkout a served drink-only order');
 
   let { response: tablesResponse, body: tables } = await request('/tables', { token: staff });
   assert(tablesResponse.status === 200, 'Staff should fetch tables');
@@ -327,22 +663,69 @@ async function runApiTests() {
   });
   assert(soldOutOrder.response.status === 400, 'Sold-out menu item should be rejected in new orders');
 
+  const lunchComboComponent = lunchCombo.items[0];
+  const soldOutBundleComponent = await request(`/menu-items/${lunchComboComponent.menuItemId}/sold-out`, {
+    method: 'PATCH',
+    token: chef,
+    body: { isSoldOut: true }
+  });
+  assert(soldOutBundleComponent.response.status === 200, 'Chef should mark a bundle component sold out');
+
+  const publicBundlesAfterComponentSoldOut = await request('/menu-items/bundles');
+  assert(
+    publicBundlesAfterComponentSoldOut.response.status === 200
+      && !publicBundlesAfterComponentSoldOut.body.some((bundle) => bundle.id === lunchCombo.id),
+    'Bundles with sold-out components should be hidden from public ordering'
+  );
+
+  const soldOutComponentBundleOrder = await request('/orders', {
+    method: 'POST',
+    token: staff,
+    body: {
+      orderSource: 'in_person',
+      fulfillmentType: 'to_go',
+      serverName: 'Kent',
+      items: [{ bundleId: lunchCombo.id, quantity: 1 }]
+    }
+  });
+  assert(soldOutComponentBundleOrder.response.status === 400, 'Bundles with sold-out components should be rejected in new orders');
+
+  const invalidBundleWithSoldOutComponent = await request('/menu-items/bundles', {
+    method: 'POST',
+    token: admin,
+    body: {
+      name: 'Invalid Sold Out Combo',
+      priceCents: 1000,
+      isAvailable: true,
+      isSoldOut: false,
+      items: [{ menuItemVariantId: lunchComboComponent.menuItemVariantId, quantity: 1 }]
+    }
+  });
+  assert(invalidBundleWithSoldOutComponent.response.status === 400, 'Admin should not create bundles with sold-out components');
+
   console.log(JSON.stringify({
     checked: [
       'auth',
       'menu',
+      'menu bundles',
       'table occupancy',
       'capacity limits',
       'role boundaries',
       'status transitions',
       'item-level kitchen workflow',
       'split quantity item tracking',
+      'menu item size variants',
+      'staff-handled drinks',
       'checkout tax validation',
       'duplicate checkout prevention',
+      'split payment checkout',
+      'amount split checkout',
+      'legacy quantity checkout',
       'active order filtering',
       'admin history',
       'table cleaning',
       'sold-out ordering guard',
+      'bundle sold-out dependency guard',
       'security headers',
       'request id header',
       'realtime order events',
@@ -451,6 +834,65 @@ async function createRealtimeWaiter(token, predicate) {
       controller.abort();
     }
   };
+}
+
+async function createLegacyQuantityOrder(menuItem) {
+  const client = new pg.Client({ connectionString: TEST_DATABASE_URL });
+  await client.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const variant = await client.query(
+      'SELECT id, price_cents FROM menu_item_variants WHERE menu_item_id = $1 AND is_default = TRUE',
+      [menuItem.id]
+    );
+    assert(variant.rowCount === 1, 'Legacy quantity test requires a default variant');
+
+    const order = await client.query(
+      `
+        INSERT INTO orders (
+          order_source,
+          fulfillment_type,
+          server_name,
+          status,
+          payment_status
+        )
+        VALUES ('in_person', 'to_go', 'Kent', 'served', 'unpaid')
+        RETURNING id
+      `
+    );
+    const item = await client.query(
+      `
+        INSERT INTO order_items (
+          order_id,
+          menu_item_id,
+          menu_item_variant_id,
+          quantity,
+          price_cents,
+          status,
+          prepared_at,
+          served_at
+        )
+        VALUES ($1, $2, $3, 2, $4, 'served', NOW(), NOW())
+        RETURNING id
+      `,
+      [order.rows[0].id, menuItem.id, variant.rows[0].id, variant.rows[0].price_cents]
+    );
+
+    await client.query('COMMIT');
+
+    return {
+      orderId: order.rows[0].id,
+      itemId: item.rows[0].id,
+      subtotalCents: variant.rows[0].price_cents * 2
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    await client.end();
+  }
 }
 
 async function request(path, options = {}) {

@@ -192,7 +192,16 @@ async function seedOrders(count, startIndex) {
   await client.connect();
 
   try {
-    const menuResult = await client.query('SELECT id, price_cents FROM menu_items ORDER BY name');
+    const menuResult = await client.query(`
+      SELECT
+        mi.id,
+        miv.id AS variant_id,
+        miv.price_cents
+      FROM menu_items mi
+      JOIN menu_item_variants miv ON miv.menu_item_id = mi.id
+      WHERE miv.is_default = TRUE
+      ORDER BY mi.name
+    `);
     const userResult = await client.query("SELECT id, name, role FROM users WHERE email = 'admin@example.com'");
     const menuItems = menuResult.rows;
     const actor = userResult.rows[0];
@@ -257,10 +266,10 @@ async function seedOrders(count, startIndex) {
         const menuItem = menuItems[(index + itemIndex) % menuItems.length];
         await client.query(
           `
-            INSERT INTO order_items (order_id, menu_item_id, quantity, price_cents)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO order_items (order_id, menu_item_id, menu_item_variant_id, quantity, price_cents)
+            VALUES ($1, $2, $3, $4, $5)
           `,
-          [orderId, menuItem.id, 1 + ((index + itemIndex) % 2), menuItem.price_cents]
+          [orderId, menuItem.id, menuItem.variant_id, 1 + ((index + itemIndex) % 2), menuItem.price_cents]
         );
       }
 

@@ -1,7 +1,7 @@
 export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'served' | 'cancelled';
 export type OrderItemStatus = 'pending' | 'preparing' | 'ready' | 'served';
 export type OrderEventType = 'order_created' | 'order_updated' | 'status_changed' | 'payment_recorded';
-export type PaymentStatus = 'unpaid' | 'paid' | 'refunded';
+export type PaymentStatus = 'unpaid' | 'partially_paid' | 'paid' | 'refunded';
 export type PaymentMethod = 'cash' | 'card';
 export type UserRole = 'staff' | 'admin' | 'chef';
 export type OrderSource = 'in_person' | 'phone';
@@ -23,6 +23,36 @@ export type MenuItem = {
   priceCents: number;
   isAvailable: boolean;
   isSoldOut: boolean;
+  variants: MenuItemVariant[];
+};
+
+export type MenuItemVariant = {
+  id: string;
+  menuItemId: string;
+  name: string;
+  priceCents: number;
+  isDefault: boolean;
+};
+
+export type MenuBundle = {
+  id: string;
+  name: string;
+  priceCents: number;
+  isAvailable: boolean;
+  isSoldOut: boolean;
+  items: MenuBundleItem[];
+};
+
+export type MenuBundleItem = {
+  menuItemId: string;
+  menuItemVariantId: string;
+  menuItemName: string;
+  variantName: string;
+  category: string;
+  quantity: number;
+  priceCents: number;
+  isAvailable: boolean;
+  isSoldOut: boolean;
 };
 
 export type RestaurantTable = {
@@ -37,12 +67,33 @@ export type RestaurantTable = {
 export type OrderItem = {
   id: string;
   menuItemId: string;
+  menuItemVariantId: string;
   menuItemName: string;
+  menuItemCategory: string;
+  variantName: string;
+  bundleId: string | null;
+  bundleName: string | null;
   quantity: number;
   priceCents: number;
   status: OrderItemStatus;
   preparedAt: string | null;
   servedAt: string | null;
+  isKitchenItem: boolean;
+  paymentId: string | null;
+};
+
+export type OrderPayment = {
+  id: string;
+  orderId: string;
+  paymentMethod: PaymentMethod;
+  subtotalCents: number;
+  taxCents: number;
+  tipCents: number;
+  totalCents: number;
+  actorName: string;
+  actorRole: UserRole;
+  createdAt: string;
+  itemIds: string[];
 };
 
 export type Order = {
@@ -66,6 +117,7 @@ export type Order = {
   createdAt: string;
   updatedAt: string;
   items: OrderItem[];
+  payments: OrderPayment[];
 };
 
 export type OrderEvent = {
@@ -83,7 +135,9 @@ export type OrderEvent = {
 };
 
 export type DraftItem = {
-  menuItemId: string;
+  menuItemId?: string;
+  menuItemVariantId?: string;
+  bundleId?: string;
   quantity: number;
 };
 

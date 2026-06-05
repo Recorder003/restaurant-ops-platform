@@ -4,11 +4,12 @@ import { z } from 'zod';
 import { requireAuth, requireRole, type AuthenticatedRequest } from './authMiddleware.js';
 import { pool, query } from './db.js';
 import { broadcastRealtimeEvent } from './realtime.js';
-import type { FulfillmentType, Order, OrderEvent, OrderEventType, OrderItem, OrderItemStatus, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, TableStatus, User } from './types.js';
+import type { FulfillmentType, Order, OrderEvent, OrderEventType, OrderItem, OrderItemStatus, OrderPayment, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, TableStatus, User } from './types.js';
 
 const router = Router();
 const EXTRA_CHAIRS_ALLOWED = 2;
 const TAX_RATE = 0.086;
+const NON_KITCHEN_CATEGORIES = new Set(['Drinks']);
 
 router.use(requireAuth);
 
@@ -22,8 +23,12 @@ const createOrderSchema = z.object({
   notes: z.string().trim().max(500).optional(),
   items: z.array(
     z.object({
-      menuItemId: z.string().uuid(),
+      menuItemId: z.string().uuid().optional(),
+      menuItemVariantId: z.string().uuid().optional(),
+      bundleId: z.string().uuid().optional(),
       quantity: z.number().int().positive().max(99)
+    }).refine((value) => Boolean(value.bundleId) !== Boolean(value.menuItemId), {
+      message: 'Order item must include either menuItemId or bundleId'
     })
   ).min(1)
 }).superRefine((value, ctx) => {
@@ -83,6 +88,7 @@ const itemStatusSchema = z.object({
 
 const checkoutSchema = z.object({
   paymentMethod: z.enum(['cash', 'card']),
+  orderItemIds: z.array(z.string().uuid()).min(1).optional(),
   subtotalCents: z.number().int().min(0),
   taxCents: z.number().int().min(0),
   tipCents: z.number().int().min(0),
@@ -126,6 +132,16 @@ router.get('/', requireRole('staff', 'admin', 'chef'), async (req, res, next) =>
 
     if (currentUser.role === 'chef') {
       where.push(`o.status IN ('pending', 'preparing')`);
+      where.push(`
+        EXISTS (
+          SELECT 1
+          FROM order_items chef_oi
+          JOIN menu_items chef_mi ON chef_mi.id = chef_oi.menu_item_id
+          WHERE chef_oi.order_id = o.id
+            AND chef_mi.category != 'Drinks'
+            AND chef_oi.status IN ('pending', 'preparing')
+        )
+      `);
     }
 
     if (filters.status) {
@@ -202,19 +218,59 @@ router.get('/', requireRole('staff', 'admin', 'chef'), async (req, res, next) =>
             json_build_object(
               'id', oi.id,
               'menuItemId', mi.id,
+              'menuItemVariantId', miv.id,
               'menuItemName', mi.name,
+              'menuItemCategory', mi.category,
+              'variantName', miv.name,
+              'bundleId', mb.id,
+              'bundleName', mb.name,
               'quantity', oi.quantity,
               'priceCents', oi.price_cents,
               'status', oi.status,
               'preparedAt', oi.prepared_at,
-              'servedAt', oi.served_at
+              'servedAt', oi.served_at,
+              'isKitchenItem', mi.category != 'Drinks',
+              'paymentId', opi.payment_id
             )
           ) FILTER (WHERE oi.id IS NOT NULL),
           '[]'
-        ) AS items
+        ) AS items,
+        COALESCE(
+          (
+            SELECT json_agg(
+              json_build_object(
+                'id', payments.id,
+                'orderId', payments.order_id,
+                'paymentMethod', payments.payment_method,
+                'subtotalCents', payments.subtotal_cents,
+                'taxCents', payments.tax_cents,
+                'tipCents', payments.tip_cents,
+                'totalCents', payments.total_cents,
+                'actorName', payments.actor_name,
+                'actorRole', payments.actor_role,
+                'createdAt', payments.created_at,
+                'itemIds', COALESCE(payments.item_ids, '[]'::json)
+              )
+              ORDER BY payments.created_at ASC
+            )
+            FROM (
+              SELECT
+                op.*,
+                json_agg(opi_items.order_item_id ORDER BY opi_items.order_item_id) AS item_ids
+              FROM order_payments op
+              LEFT JOIN order_payment_items opi_items ON opi_items.payment_id = op.id
+              WHERE op.order_id = p.id
+              GROUP BY op.id
+            ) payments
+          ),
+          '[]'
+        ) AS payments
       FROM paged_orders p
       LEFT JOIN order_items oi ON oi.order_id = p.id
       LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
+      LEFT JOIN menu_item_variants miv ON miv.id = oi.menu_item_variant_id
+      LEFT JOIN menu_bundles mb ON mb.id = oi.bundle_id
+      LEFT JOIN order_payment_items opi ON opi.order_item_id = oi.id
       GROUP BY p.id, p.order_source, p.fulfillment_type, p.table_number, p.party_size, p.phone_number, p.server_name, p.status, p.payment_status, p.payment_method, p.payment_subtotal_cents, p.payment_tax_cents, p.payment_tip_cents, p.payment_total_cents, p.paid_at, p.notes, p.created_at, p.updated_at, p.total_count
       ORDER BY p.created_at DESC
     `, params);
@@ -282,16 +338,39 @@ router.post('/', requireRole('staff', 'admin'), async (req, res, next) => {
     const orderId = orderResult.rows[0].id;
 
     for (const item of parsed.data.items) {
-      const menuResult = await client.query<{ price_cents: number }>(
-        'SELECT price_cents FROM menu_items WHERE id = $1 AND is_available = TRUE AND is_sold_out = FALSE',
-        [item.menuItemId]
+      if (item.bundleId) {
+        await insertBundleOrderItems(client, orderId, item.bundleId, item.quantity);
+        continue;
+      }
+
+      if (!item.menuItemId) {
+        throw new OrderInputError('Menu item id is required.');
+      }
+
+      const menuResult = await client.query<{ id: string; price_cents: number }>(
+        `
+          SELECT miv.id, miv.price_cents
+          FROM menu_item_variants miv
+          JOIN menu_items mi ON mi.id = miv.menu_item_id
+          WHERE mi.id = $1
+            AND miv.id = COALESCE($2, (
+              SELECT default_variant.id
+              FROM menu_item_variants default_variant
+              WHERE default_variant.menu_item_id = mi.id
+                AND default_variant.is_default = TRUE
+              LIMIT 1
+            ))
+            AND mi.is_available = TRUE
+            AND mi.is_sold_out = FALSE
+        `,
+        [item.menuItemId, item.menuItemVariantId ?? null]
       );
 
       if (menuResult.rowCount === 0) {
-        throw new OrderInputError(`Menu item ${item.menuItemId} is unavailable, sold out, or does not exist.`);
+        throw new OrderInputError(`Menu item variant ${item.menuItemVariantId} is unavailable, sold out, or does not exist.`);
       }
 
-      await insertUnitOrderItems(client, orderId, item.menuItemId, item.quantity, menuResult.rows[0].price_cents);
+      await insertUnitOrderItems(client, orderId, item.menuItemId, menuResult.rows[0].id, item.quantity, menuResult.rows[0].price_cents);
     }
 
     await insertOrderEvent(client, {
@@ -400,16 +479,39 @@ router.patch('/:id', requireRole('staff', 'admin'), async (req, res, next) => {
     await client.query('DELETE FROM order_items WHERE order_id = $1', [orderId]);
 
     for (const item of parsed.data.items) {
-      const menuResult = await client.query<{ price_cents: number }>(
-        'SELECT price_cents FROM menu_items WHERE id = $1 AND is_available = TRUE AND is_sold_out = FALSE',
-        [item.menuItemId]
+      if (item.bundleId) {
+        await insertBundleOrderItems(client, orderId, item.bundleId, item.quantity);
+        continue;
+      }
+
+      if (!item.menuItemId) {
+        throw new OrderInputError('Menu item id is required.');
+      }
+
+      const menuResult = await client.query<{ id: string; price_cents: number }>(
+        `
+          SELECT miv.id, miv.price_cents
+          FROM menu_item_variants miv
+          JOIN menu_items mi ON mi.id = miv.menu_item_id
+          WHERE mi.id = $1
+            AND miv.id = COALESCE($2, (
+              SELECT default_variant.id
+              FROM menu_item_variants default_variant
+              WHERE default_variant.menu_item_id = mi.id
+                AND default_variant.is_default = TRUE
+              LIMIT 1
+            ))
+            AND mi.is_available = TRUE
+            AND mi.is_sold_out = FALSE
+        `,
+        [item.menuItemId, item.menuItemVariantId ?? null]
       );
 
       if (menuResult.rowCount === 0) {
-        throw new OrderInputError(`Menu item ${item.menuItemId} is unavailable, sold out, or does not exist.`);
+        throw new OrderInputError(`Menu item variant ${item.menuItemVariantId} is unavailable, sold out, or does not exist.`);
       }
 
-      await insertUnitOrderItems(client, orderId, item.menuItemId, item.quantity, menuResult.rows[0].price_cents);
+      await insertUnitOrderItems(client, orderId, item.menuItemId, menuResult.rows[0].id, item.quantity, menuResult.rows[0].price_cents);
     }
 
     await insertOrderEvent(client, {
@@ -458,11 +560,13 @@ router.patch('/:orderId/items/:itemId/status', requireRole('staff', 'admin', 'ch
     const current = await client.query<{
       status: OrderItemStatus;
       order_status: OrderStatus;
+      category: string;
     }>(
       `
-        SELECT oi.status, o.status AS order_status
+        SELECT oi.status, o.status AS order_status, mi.category
         FROM order_items oi
         JOIN orders o ON o.id = oi.order_id
+        JOIN menu_items mi ON mi.id = oi.menu_item_id
         WHERE oi.id = $1 AND oi.order_id = $2
         FOR UPDATE OF oi, o
       `,
@@ -482,14 +586,23 @@ router.patch('/:orderId/items/:itemId/status', requireRole('staff', 'admin', 'ch
     }
 
     const currentStatus = current.rows[0].status;
+    const isKitchenItem = !NON_KITCHEN_CATEGORIES.has(current.rows[0].category);
 
     if (currentStatus !== nextStatus && !itemTransitions[currentStatus].includes(nextStatus)) {
+      if (!(currentUser.role === 'staff' && !isKitchenItem && currentStatus === 'pending' && nextStatus === 'served')) {
+        await client.query('ROLLBACK');
+        res.status(409).json({ message: `Cannot change item from ${currentStatus} to ${nextStatus}` });
+        return;
+      }
+    }
+
+    if (!isKitchenItem && currentUser.role === 'chef') {
       await client.query('ROLLBACK');
-      res.status(409).json({ message: `Cannot change item from ${currentStatus} to ${nextStatus}` });
+      res.status(403).json({ message: 'This item does not require kitchen preparation' });
       return;
     }
 
-    if (currentUser.role !== 'admin' && !isRoleAllowedItemTransition(currentUser.role, currentStatus, nextStatus)) {
+    if (currentUser.role !== 'admin' && !isRoleAllowedItemTransition(currentUser.role, currentStatus, nextStatus, isKitchenItem)) {
       await client.query('ROLLBACK');
       res.status(403).json({ message: 'You do not have permission to make this item status change' });
       return;
@@ -674,23 +787,65 @@ router.post('/:id/checkout', requireRole('staff', 'admin'), async (req, res, nex
       return;
     }
 
-    if (current.rows[0].payment_status !== 'unpaid') {
+    if (current.rows[0].payment_status === 'paid') {
       await client.query('ROLLBACK');
       res.status(409).json({ message: 'Order has already been paid' });
       return;
     }
 
-    const subtotal = await client.query<{ total_cents: number }>(
-      'SELECT COALESCE(SUM(quantity * price_cents), 0)::int AS total_cents FROM order_items WHERE order_id = $1',
+    const isItemBasedPayment = parsed.data.orderItemIds !== undefined;
+    const selectedItems = isItemBasedPayment
+      ? await client.query<{ id: string; quantity: number; price_cents: number }>(
+        `
+          SELECT oi.id, oi.quantity, oi.price_cents
+          FROM order_items oi
+          LEFT JOIN order_payment_items opi ON opi.order_item_id = oi.id
+          WHERE oi.order_id = $1
+            AND oi.id = ANY($2::uuid[])
+            AND opi.order_item_id IS NULL
+          FOR UPDATE OF oi
+        `,
+        [orderId, parsed.data.orderItemIds]
+      )
+      : { rows: [], rowCount: 0 };
+
+    const selectedIds = selectedItems.rows.map((item) => item.id);
+
+    if (isItemBasedPayment && selectedIds.length === 0) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ message: 'No unpaid order items were selected for checkout' });
+      return;
+    }
+
+    if (parsed.data.orderItemIds && selectedIds.length !== new Set(parsed.data.orderItemIds).size) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ message: 'One or more selected order items are already paid or do not belong to this order' });
+      return;
+    }
+
+    const balance = await client.query<{ order_subtotal_cents: number; paid_subtotal_cents: number }>(
+      `
+        SELECT
+          COALESCE((SELECT SUM(quantity * price_cents) FROM order_items WHERE order_id = $1), 0)::int AS order_subtotal_cents,
+          COALESCE((SELECT SUM(subtotal_cents) FROM order_payments WHERE order_id = $1), 0)::int AS paid_subtotal_cents
+      `,
       [orderId]
     );
-
-    const expectedSubtotalCents = subtotal.rows[0].total_cents;
+    const remainingSubtotalCents = Math.max(0, balance.rows[0].order_subtotal_cents - balance.rows[0].paid_subtotal_cents);
+    const expectedSubtotalCents = isItemBasedPayment
+      ? selectedItems.rows.reduce((sum, item) => sum + item.quantity * item.price_cents, 0)
+      : parsed.data.subtotalCents;
     const expectedTaxCents = Math.round(expectedSubtotalCents * TAX_RATE);
 
-    if (parsed.data.subtotalCents !== expectedSubtotalCents) {
+    if (isItemBasedPayment && parsed.data.subtotalCents !== expectedSubtotalCents) {
       await client.query('ROLLBACK');
       res.status(409).json({ message: 'Checkout subtotal does not match current order total' });
+      return;
+    }
+
+    if (!isItemBasedPayment && (parsed.data.subtotalCents <= 0 || parsed.data.subtotalCents > remainingSubtotalCents)) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ message: 'Checkout amount exceeds remaining order balance' });
       return;
     }
 
@@ -700,29 +855,43 @@ router.post('/:id/checkout', requireRole('staff', 'admin'), async (req, res, nex
       return;
     }
 
-    await client.query(
+    const paymentResult = await client.query<{ id: string }>(
       `
-        UPDATE orders
-        SET
-          payment_status = 'paid',
-          payment_method = $1,
-          payment_subtotal_cents = $2,
-          payment_tax_cents = $3,
-          payment_tip_cents = $4,
-          payment_total_cents = $5,
-          paid_at = NOW(),
-          updated_at = NOW()
-        WHERE id = $6
+        INSERT INTO order_payments (
+          order_id,
+          payment_method,
+          subtotal_cents,
+          tax_cents,
+          tip_cents,
+          total_cents,
+          actor_user_id,
+          actor_name,
+          actor_role
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id
       `,
       [
+        orderId,
         parsed.data.paymentMethod,
         parsed.data.subtotalCents,
         parsed.data.taxCents,
         parsed.data.tipCents,
         parsed.data.totalCents,
-        orderId
+        currentUser.id,
+        currentUser.name,
+        currentUser.role
       ]
     );
+
+    for (const itemId of selectedIds) {
+      await client.query(
+        'INSERT INTO order_payment_items (payment_id, order_item_id) VALUES ($1, $2)',
+        [paymentResult.rows[0].id, itemId]
+      );
+    }
+
+    await syncOrderPaymentSummary(client, orderId);
 
     await insertOrderEvent(client, {
       orderId,
@@ -773,19 +942,59 @@ async function getOrderById(id: string) {
             json_build_object(
               'id', oi.id,
               'menuItemId', mi.id,
+              'menuItemVariantId', miv.id,
               'menuItemName', mi.name,
+              'menuItemCategory', mi.category,
+              'variantName', miv.name,
+              'bundleId', mb.id,
+              'bundleName', mb.name,
               'quantity', oi.quantity,
               'priceCents', oi.price_cents,
               'status', oi.status,
               'preparedAt', oi.prepared_at,
-              'servedAt', oi.served_at
+              'servedAt', oi.served_at,
+              'isKitchenItem', mi.category != 'Drinks',
+              'paymentId', opi.payment_id
             )
           ) FILTER (WHERE oi.id IS NOT NULL),
           '[]'
-        ) AS items
+        ) AS items,
+        COALESCE(
+          (
+            SELECT json_agg(
+              json_build_object(
+                'id', payments.id,
+                'orderId', payments.order_id,
+                'paymentMethod', payments.payment_method,
+                'subtotalCents', payments.subtotal_cents,
+                'taxCents', payments.tax_cents,
+                'tipCents', payments.tip_cents,
+                'totalCents', payments.total_cents,
+                'actorName', payments.actor_name,
+                'actorRole', payments.actor_role,
+                'createdAt', payments.created_at,
+                'itemIds', COALESCE(payments.item_ids, '[]'::json)
+              )
+              ORDER BY payments.created_at ASC
+            )
+            FROM (
+              SELECT
+                op.*,
+                json_agg(opi_items.order_item_id ORDER BY opi_items.order_item_id) AS item_ids
+              FROM order_payments op
+              LEFT JOIN order_payment_items opi_items ON opi_items.payment_id = op.id
+              WHERE op.order_id = o.id
+              GROUP BY op.id
+            ) payments
+          ),
+          '[]'
+        ) AS payments
       FROM orders o
       LEFT JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id
+      LEFT JOIN menu_item_variants miv ON miv.id = oi.menu_item_variant_id
+      LEFT JOIN menu_bundles mb ON mb.id = oi.bundle_id
+      LEFT JOIN order_payment_items opi ON opi.order_item_id = oi.id
       WHERE o.id = $1
       GROUP BY o.id
     `,
@@ -816,6 +1025,7 @@ type OrderRow = {
   created_at: Date;
   updated_at: Date;
   items: OrderItem[];
+  payments: OrderPayment[];
 };
 
 type OrderListRow = OrderRow & {
@@ -857,7 +1067,11 @@ function mapOrder(row: OrderRow): Order {
     totalCents: row.total_cents,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
-    items: row.items
+    items: row.items,
+    payments: row.payments.map((payment) => ({
+      ...payment,
+      createdAt: new Date(payment.createdAt).toISOString()
+    }))
   };
 }
 
@@ -925,21 +1139,155 @@ async function insertOrderEvent(
   );
 }
 
+async function syncOrderPaymentSummary(client: PoolClient, orderId: string) {
+  const summary = await client.query<{
+    subtotal_cents: number;
+    tax_cents: number;
+    tip_cents: number;
+    total_cents: number;
+    payment_method: PaymentMethod | null;
+    order_subtotal_cents: number;
+  }>(
+    `
+      SELECT
+        COALESCE(SUM(op.subtotal_cents), 0)::int AS subtotal_cents,
+        COALESCE(SUM(op.tax_cents), 0)::int AS tax_cents,
+        COALESCE(SUM(op.tip_cents), 0)::int AS tip_cents,
+        COALESCE(SUM(op.total_cents), 0)::int AS total_cents,
+        CASE WHEN COUNT(DISTINCT op.payment_method) = 1 THEN MIN(op.payment_method) ELSE NULL END AS payment_method,
+        (
+          SELECT COALESCE(SUM(quantity * price_cents), 0)::int
+          FROM order_items
+          WHERE order_id = $1
+        ) AS order_subtotal_cents
+      FROM order_payments op
+      WHERE op.order_id = $1
+    `,
+    [orderId]
+  );
+
+  const row = summary.rows[0];
+  const paymentStatus = row.subtotal_cents === 0
+    ? 'unpaid'
+    : row.subtotal_cents >= row.order_subtotal_cents
+      ? 'paid'
+      : 'partially_paid';
+
+  await client.query(
+    `
+      UPDATE orders
+      SET
+        payment_status = $1,
+        payment_method = $2,
+        payment_subtotal_cents = $3,
+        payment_tax_cents = $4,
+        payment_tip_cents = $5,
+        payment_total_cents = $6,
+        paid_at = CASE WHEN $1 = 'paid' THEN NOW() ELSE paid_at END,
+        updated_at = NOW()
+      WHERE id = $7
+    `,
+    [
+      paymentStatus,
+      row.payment_method,
+      row.subtotal_cents,
+      row.tax_cents,
+      row.tip_cents,
+      row.total_cents,
+      orderId
+    ]
+  );
+}
+
 async function insertUnitOrderItems(
   client: PoolClient,
   orderId: string,
   menuItemId: string,
+  menuItemVariantId: string,
   quantity: number,
   priceCents: number
 ) {
   for (let index = 0; index < quantity; index += 1) {
     await client.query(
       `
-        INSERT INTO order_items (order_id, menu_item_id, quantity, price_cents)
-        VALUES ($1, $2, 1, $3)
+        INSERT INTO order_items (order_id, menu_item_id, menu_item_variant_id, quantity, price_cents)
+        VALUES ($1, $2, $3, 1, $4)
       `,
-      [orderId, menuItemId, priceCents]
+        [orderId, menuItemId, menuItemVariantId, priceCents]
     );
+  }
+}
+
+async function insertBundleOrderItems(client: PoolClient, orderId: string, bundleId: string, quantity: number) {
+  const bundle = await client.query<{
+    bundle_id: string;
+    bundle_name: string;
+    bundle_price_cents: number;
+    menu_item_id: string;
+    menu_item_variant_id: string;
+    component_quantity: number;
+    component_price_cents: number;
+  }>(
+    `
+      SELECT
+        mb.id AS bundle_id,
+        mb.name AS bundle_name,
+        mb.price_cents AS bundle_price_cents,
+        mi.id AS menu_item_id,
+        miv.id AS menu_item_variant_id,
+        mbi.quantity AS component_quantity,
+        miv.price_cents AS component_price_cents
+      FROM menu_bundles mb
+      JOIN menu_bundle_items mbi ON mbi.bundle_id = mb.id
+      JOIN menu_item_variants miv ON miv.id = mbi.menu_item_variant_id
+      JOIN menu_items mi ON mi.id = miv.menu_item_id
+      WHERE mb.id = $1
+        AND mb.is_available = TRUE
+        AND mb.is_sold_out = FALSE
+        AND NOT EXISTS (
+          SELECT 1
+          FROM menu_bundle_items component
+          JOIN menu_item_variants component_variant ON component_variant.id = component.menu_item_variant_id
+          JOIN menu_items component_item ON component_item.id = component_variant.menu_item_id
+          WHERE component.bundle_id = mb.id
+            AND (component_item.is_available = FALSE OR component_item.is_sold_out = TRUE)
+        )
+        AND mi.is_available = TRUE
+        AND mi.is_sold_out = FALSE
+      ORDER BY mi.category, mi.name
+    `,
+    [bundleId]
+  );
+
+  if (bundle.rowCount === 0) {
+    throw new OrderInputError(`Menu bundle ${bundleId} is unavailable, sold out, or does not exist.`);
+  }
+
+  const components = bundle.rows.flatMap((row) => (
+    Array.from({ length: row.component_quantity }, () => row)
+  ));
+  const regularTotal = components.reduce((sum, component) => sum + component.component_price_cents, 0);
+
+  for (let bundleIndex = 0; bundleIndex < quantity; bundleIndex += 1) {
+    let allocatedTotal = 0;
+
+    for (let componentIndex = 0; componentIndex < components.length; componentIndex += 1) {
+      const component = components[componentIndex];
+      const isLastComponent = componentIndex === components.length - 1;
+      const priceCents = isLastComponent
+        ? component.bundle_price_cents - allocatedTotal
+        : Math.round((component.component_price_cents / regularTotal) * component.bundle_price_cents);
+
+      allocatedTotal += priceCents;
+
+      await client.query(
+        `
+          INSERT INTO order_items (order_id, menu_item_id, menu_item_variant_id, bundle_id, quantity, price_cents)
+          VALUES ($1, $2, $3, $4, 1, $5)
+        `,
+        [orderId, component.menu_item_id, component.menu_item_variant_id, component.bundle_id, priceCents]
+      );
+    }
   }
 }
 
@@ -1093,13 +1441,23 @@ function isRoleAllowedTransition(role: 'staff' | 'chef', currentStatus: OrderSta
     || (currentStatus === 'ready' && nextStatus === 'served');
 }
 
-function isRoleAllowedItemTransition(role: 'staff' | 'chef', currentStatus: OrderItemStatus, nextStatus: OrderItemStatus) {
+function isRoleAllowedItemTransition(
+  role: 'staff' | 'chef',
+  currentStatus: OrderItemStatus,
+  nextStatus: OrderItemStatus,
+  isKitchenItem: boolean
+) {
   if (role === 'chef') {
+    if (!isKitchenItem) {
+      return false;
+    }
+
     return (currentStatus === 'pending' && nextStatus === 'preparing')
       || (currentStatus === 'preparing' && nextStatus === 'ready');
   }
 
-  return currentStatus === 'ready' && nextStatus === 'served';
+  return (currentStatus === 'ready' && nextStatus === 'served')
+    || (!isKitchenItem && currentStatus === 'pending' && nextStatus === 'served');
 }
 
 export default router;
