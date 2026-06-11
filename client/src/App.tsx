@@ -90,6 +90,7 @@ const extraChairsAllowed = 2;
 const taxRate = 0.086;
 const protectedDefaultUserEmails = new Set(['admin@example.com', 'staff@example.com', 'chef@example.com']);
 const protectedDefaultTableNames = new Set(Array.from({ length: 12 }, (_, index) => `T${index + 1}`));
+const alwaysAvailableMenuItemNames = new Set(['Lemon Iced Tea', 'Signature Beef Noodles']);
 
 type OrderFilterState = Omit<OrderFilters, 'status'> & {
   status: OrderStatus | 'all' | 'active';
@@ -1015,6 +1016,11 @@ function App() {
   }
 
   async function handleStaffRoleChange(staffUser: User, role: UserRole) {
+    if (isProtectedDefaultUser(staffUser)) {
+      setError('Default demo account roles cannot be changed');
+      return;
+    }
+
     try {
       const updated = await updateStaffUser(staffUser.id, { role });
       setStaffUsers((current) => current.map((item) => (item.id === updated.id ? updated : item)));
@@ -1198,6 +1204,11 @@ function App() {
   }
 
   async function handleMenuItemUpdate(menuItem: MenuItem, input: Partial<MenuItem>) {
+    if (isAlwaysAvailableMenuItem(menuItem) && (input.isAvailable === false || input.isSoldOut === true)) {
+      setError(`${menuItem.name} must remain available`);
+      return;
+    }
+
     try {
       const updated = await updateMenuItem(menuItem.id, input);
       setAdminMenuItems((current) => current.map((item) => (item.id === updated.id ? updated : item)).sort(compareMenuItems));
@@ -1232,6 +1243,11 @@ function App() {
   }
 
   async function handleSoldOutChange(menuItem: MenuItem, isSoldOut: boolean) {
+    if (isAlwaysAvailableMenuItem(menuItem) && isSoldOut) {
+      setError(`${menuItem.name} cannot be marked sold out`);
+      return;
+    }
+
     try {
       const updated = user?.role === 'admin'
         ? await updateMenuItem(menuItem.id, { isSoldOut })
@@ -1410,11 +1426,12 @@ function App() {
                   <input
                     type="checkbox"
                     checked={menuItem.isSoldOut}
+                    disabled={isAlwaysAvailableMenuItem(menuItem)}
                     onChange={(event) => handleSoldOutChange(menuItem, event.target.checked)}
                   />
                   <span>
                     <strong>{menuItem.name}</strong>
-                    <small>{menuItem.category}</small>
+                    <small>{menuItem.category}{isAlwaysAvailableMenuItem(menuItem) ? ' / Protected' : ''}</small>
                   </span>
                 </label>
               ))}
@@ -2056,6 +2073,7 @@ function App() {
                 <article key={menuItem.id} className="menu-admin-row">
                   <div className="menu-admin-name">
                     <strong>{menuItem.name}</strong>
+                    {isAlwaysAvailableMenuItem(menuItem) && <span className="protected-label">Protected availability</span>}
                     {menuItem.variants.length > 1 && (
                       <span>{menuItem.variants.map((variant) => `${variant.name} ${formatMoney(variant.priceCents)}`).join(' / ')}</span>
                     )}
@@ -2099,6 +2117,7 @@ function App() {
                     <input
                       type="checkbox"
                       checked={menuItem.isAvailable}
+                      disabled={isAlwaysAvailableMenuItem(menuItem)}
                       onChange={(event) => handleMenuItemUpdate(menuItem, { isAvailable: event.target.checked })}
                     />
                     Available
@@ -2107,6 +2126,7 @@ function App() {
                     <input
                       type="checkbox"
                       checked={menuItem.isSoldOut}
+                      disabled={isAlwaysAvailableMenuItem(menuItem)}
                       onChange={(event) => handleSoldOutChange(menuItem, event.target.checked)}
                     />
                     Sold Out
@@ -2378,6 +2398,7 @@ function App() {
                   </div>
                   <select
                     value={staffUser.role}
+                    disabled={isProtectedDefaultUser(staffUser)}
                     onChange={(event) => handleStaffRoleChange(staffUser, event.target.value as UserRole)}
                   >
                     <option value="staff">Staff</option>
@@ -2757,6 +2778,10 @@ function isProtectedDefaultUser(user: User) {
 
 function isProtectedDefaultTable(table: RestaurantTable) {
   return protectedDefaultTableNames.has(table.name);
+}
+
+function isAlwaysAvailableMenuItem(menuItem: MenuItem) {
+  return alwaysAvailableMenuItemNames.has(menuItem.name);
 }
 
 function compareMenuBundles(left: MenuBundle, right: MenuBundle) {

@@ -97,6 +97,11 @@ router.patch('/staff/:id', async (req, res, next) => {
       return;
     }
 
+    if (parsed.data.role !== undefined && protectedUserEmails.has(current.rows[0].email)) {
+      res.status(403).json({ message: 'Default demo account roles cannot be changed' });
+      return;
+    }
+
     const { rows } = await query<UserRow>(
       `
         UPDATE users

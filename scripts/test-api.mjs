@@ -75,6 +75,12 @@ async function runApiTests() {
     token: admin
   });
   assert(deletedStaff.response.status === 403, 'User accounts should not be deleted');
+  const changedDefaultStaffRole = await request(`/admin/staff/${staffUser.id}`, {
+    method: 'PATCH',
+    token: admin,
+    body: { role: 'chef' }
+  });
+  assert(changedDefaultStaffRole.response.status === 403, 'Default account roles should not be changed');
   const temporaryStaff = await request('/admin/staff', {
     method: 'POST',
     token: admin,
@@ -102,16 +108,31 @@ async function runApiTests() {
   const lunchCombo = bundles.find((bundle) => bundle.name === 'Lunch Combo') ?? bundles[0];
   const drinkItem = menu.find((item) => item.category === 'Drinks');
   assert(drinkItem, 'Seed menu should include a drink item');
+  const alwaysAvailableNames = new Set(['Lemon Iced Tea', 'Signature Beef Noodles']);
   const kitchenItems = menu.filter((item) => item.category !== 'Drinks');
   assert(kitchenItems.length > 0, 'Seed menu should include kitchen items');
-  const menuItem = kitchenItems[0];
-  const secondMenuItem = kitchenItems[1] ?? menuItem;
+  const menuItem = kitchenItems.find((item) => !alwaysAvailableNames.has(item.name)) ?? kitchenItems[0];
+  const secondMenuItem = kitchenItems.find((item) => item.id !== menuItem.id && !alwaysAvailableNames.has(item.name)) ?? menuItem;
   const variantMenuItem = menu.find((item) => item.name === 'Signature Beef Noodles');
   assert(variantMenuItem?.variants.length >= 3, 'Signature Beef Noodles should include Regular, Small, and Large variants');
+  const lemonItem = menu.find((item) => item.name === 'Lemon Iced Tea');
+  assert(lemonItem, 'Seed menu should include Lemon Iced Tea');
   const smallVariant = variantMenuItem.variants.find((variant) => variant.name === 'Small');
   const largeVariant = variantMenuItem.variants.find((variant) => variant.name === 'Large');
   assert(smallVariant && largeVariant, 'Seeded menu variants should include Small and Large');
   const drinkVariant = drinkItem.variants.find((variant) => variant.isDefault) ?? drinkItem.variants[0];
+  const unavailableLemon = await request(`/menu-items/${lemonItem.id}`, {
+    method: 'PATCH',
+    token: admin,
+    body: { isAvailable: false }
+  });
+  assert(unavailableLemon.response.status === 403, 'Lemon Iced Tea should always remain available');
+  const soldOutSignature = await request(`/menu-items/${variantMenuItem.id}/sold-out`, {
+    method: 'PATCH',
+    token: chef,
+    body: { isSoldOut: true }
+  });
+  assert(soldOutSignature.response.status === 403, 'Signature Beef Noodles should not be marked sold out');
   const deletedMenuItem = await request(`/menu-items/${menuItem.id}`, {
     method: 'DELETE',
     token: admin
@@ -726,7 +747,7 @@ async function runApiTests() {
   });
   assert(soldOutOrder.response.status === 400, 'Sold-out menu item should be rejected in new orders');
 
-  const lunchComboComponent = lunchCombo.items[0];
+  const lunchComboComponent = lunchCombo.items.find((item) => !alwaysAvailableNames.has(item.menuItemName)) ?? lunchCombo.items[0];
   const soldOutBundleComponent = await request(`/menu-items/${lunchComboComponent.menuItemId}/sold-out`, {
     method: 'PATCH',
     token: chef,
@@ -775,6 +796,7 @@ async function runApiTests() {
       'capacity limits',
       'role boundaries',
       'destructive action guards',
+      'seed data protection guards',
       'status transitions',
       'item-level kitchen workflow',
       'split quantity item tracking',

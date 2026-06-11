@@ -8,6 +8,7 @@ import type { MenuBundle, MenuItem } from './types.js';
 
 const router = Router();
 const menuCategories = ['Entrees', 'Vegetables', 'Small Plates', 'Drinks', 'Desserts'] as const;
+const alwaysAvailableMenuItems = new Set(['Lemon Iced Tea', 'Signature Beef Noodles']);
 
 class MenuInputError extends Error {}
 
@@ -310,6 +311,20 @@ router.patch('/:id', requireAuth, requireRole('admin'), async (req, res, next) =
   }
 
   try {
+    if (parsed.data.isAvailable === false || parsed.data.isSoldOut === true) {
+      const current = await query<{ name: string }>('SELECT name FROM menu_items WHERE id = $1', [req.params.id]);
+
+      if (current.rowCount === 0) {
+        res.status(404).json({ message: 'Menu item not found' });
+        return;
+      }
+
+      if (alwaysAvailableMenuItems.has(current.rows[0].name)) {
+        res.status(403).json({ message: `${current.rows[0].name} must remain available` });
+        return;
+      }
+    }
+
     const { rows } = await query<{ id: string }>(
       `
         UPDATE menu_items
@@ -365,6 +380,20 @@ router.patch('/:id/sold-out', requireAuth, requireRole('admin', 'chef'), async (
   }
 
   try {
+    if (parsed.data.isSoldOut) {
+      const current = await query<{ name: string }>('SELECT name FROM menu_items WHERE id = $1', [req.params.id]);
+
+      if (current.rowCount === 0) {
+        res.status(404).json({ message: 'Menu item not found' });
+        return;
+      }
+
+      if (alwaysAvailableMenuItems.has(current.rows[0].name)) {
+        res.status(403).json({ message: `${current.rows[0].name} cannot be marked sold out` });
+        return;
+      }
+    }
+
     const { rows } = await query<{ id: string }>(
       `
         UPDATE menu_items
