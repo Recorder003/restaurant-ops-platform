@@ -10,6 +10,7 @@ const scryptAsync = promisify(scrypt);
 const databaseUrl = process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/restaurant_orders';
 const targetUrl = new URL(databaseUrl);
 const databaseName = decodeURIComponent(targetUrl.pathname.replace(/^\//, ''));
+const ssl = process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined;
 
 if (!databaseName) {
   throw new Error('DATABASE_URL must include a database name.');
@@ -34,7 +35,7 @@ try {
 }
 
 async function ensureDatabase(connectionString, dbName) {
-  const client = new pg.Client({ connectionString });
+  const client = new pg.Client({ connectionString, ssl });
 
   await client.connect();
 
@@ -51,7 +52,7 @@ async function ensureDatabase(connectionString, dbName) {
 }
 
 async function runMigrations(connectionString) {
-  const client = new pg.Client({ connectionString });
+  const client = new pg.Client({ connectionString, ssl });
   const migrations = await getMigrations();
 
   await client.connect();

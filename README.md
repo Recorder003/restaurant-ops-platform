@@ -1,5 +1,15 @@
 # Restaurant Operations & Order Management Platform
 
+## Live Demo
+
+Public demo: [http://restaurant-ops-api.us-west-1.elasticbeanstalk.com](http://restaurant-ops-api.us-west-1.elasticbeanstalk.com)
+
+Demo accounts:
+
+- Admin: `admin@example.com / Admin123!`
+- Staff: `staff@example.com / Staff123!`
+- Chef: `chef@example.com / Chef123!`
+
 A full-stack restaurant operations platform designed to support customer ordering, staff order management, menu administration, role-based access control, and order lifecycle tracking.
 
 This project is not intended to be a simple CRUD demo. The goal is to build a realistic web application that demonstrates end-to-end product thinking, frontend architecture, API design, database modeling, authentication, authorization, deployment awareness, and engineering trade-offs.

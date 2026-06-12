@@ -1,6 +1,8 @@
 import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { pool } from './db.js';
 import adminRouter from './admin.js';
@@ -12,10 +14,18 @@ import realtimeRouter from './realtime.js';
 import tablesRouter from './tables.js';
 
 const app = express();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDistPath = path.resolve(__dirname, '../../client/dist');
 
 app.use(attachRequestId);
 app.use(logRequest);
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      'upgrade-insecure-requests': null
+    }
+  }
+}));
 app.use(cors({ origin: config.clientOrigin }));
 app.use(express.json({ limit: '100kb' }));
 
@@ -44,6 +54,13 @@ app.use('/api/menu-items', menuItemsRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/tables', tablesRouter);
 app.use('/api/events', realtimeRouter);
+
+if (config.nodeEnv === 'production') {
+  app.use(express.static(clientDistPath));
+  app.get(/^\/(?!api\/).*/, (_req, res) => {
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
 
 app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   logError('request_failed', err, {
