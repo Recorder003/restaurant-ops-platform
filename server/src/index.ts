@@ -12,6 +12,7 @@ import ordersRouter from './orders.js';
 import { attachRequestId, logError, logRequest } from './requestLogging.js';
 import realtimeRouter from './realtime.js';
 import tablesRouter from './tables.js';
+import visitorsRouter from './visitors.js';
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,6 +55,7 @@ app.use('/api/menu-items', menuItemsRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/tables', tablesRouter);
 app.use('/api/events', realtimeRouter);
+app.use('/api/visitors', visitorsRouter);
 
 if (config.nodeEnv === 'production') {
   app.use(express.static(clientDistPath));

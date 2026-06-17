@@ -69,6 +69,52 @@ button:disabled {
   margin-bottom: 20px;
 }
 
+.repo-link {
+  color: #2f4f4f;
+  display: inline-flex;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.login-repo-link {
+  margin-bottom: 10px;
+}
+
+.guide-button {
+  margin-bottom: 18px;
+  width: 100%;
+}
+
+.visitor-count {
+  align-items: center;
+  background: #fff4cf;
+  border: 1px solid #f3d780;
+  border-radius: 8px;
+  color: #6f5200;
+  display: grid;
+  gap: 2px 10px;
+  grid-template-columns: 1fr auto;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+}
+
+.visitor-count span,
+.visitor-count small {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.visitor-count strong {
+  color: #1f2933;
+  font-size: 1.4rem;
+  grid-row: span 2;
+}
+
+.visitor-count small {
+  color: #8a6a11;
+}
+
 .login-form {
   display: grid;
   gap: 14px;
@@ -86,6 +132,68 @@ button:disabled {
 
 .demo-accounts strong {
   color: #1f2933;
+}
+
+.intro-backdrop {
+  z-index: 20;
+}
+
+.intro-modal {
+  background: #ffffff;
+  border: 1px solid #e8dfd3;
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(31, 41, 51, 0.18);
+  display: grid;
+  gap: 16px;
+  max-width: 620px;
+  padding: 28px;
+  width: min(620px, calc(100vw - 32px));
+}
+
+.intro-modal h2 {
+  color: #1f2933;
+  font-size: 1.8rem;
+  line-height: 1.1;
+}
+
+.intro-modal p {
+  color: #51606d;
+  margin: 0;
+}
+
+.intro-highlights,
+.intro-workflow,
+.intro-accounts {
+  display: grid;
+  gap: 8px;
+}
+
+.intro-highlights span,
+.intro-workflow,
+.intro-accounts {
+  background: #f7f4ef;
+  border: 1px solid #e8dfd3;
+  border-radius: 8px;
+  color: #51606d;
+  padding: 12px;
+}
+
+.intro-workflow strong,
+.intro-accounts strong {
+  color: #1f2933;
+}
+
+.intro-workflow ol {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.intro-workflow li {
+  margin-top: 4px;
+}
+
+.intro-accounts span {
+  color: #51606d;
 }
 
 .topbar {

@@ -18,6 +18,7 @@ import type {
 
 const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://localhost:4000/api' : '/api');
 const TOKEN_STORAGE_KEY = 'restaurant_ops_token';
+const DEVICE_STORAGE_KEY = 'restaurant_ops_device_id';
 const UNAUTHORIZED_EVENT = 'restaurant-ops:unauthorized';
 
 export type RealtimeEvent = {
@@ -49,6 +50,25 @@ export function storeToken(token: string) {
 
 export function clearStoredToken() {
   localStorage.removeItem(TOKEN_STORAGE_KEY);
+}
+
+export function getOrCreateDeviceId() {
+  const existing = localStorage.getItem(DEVICE_STORAGE_KEY);
+
+  if (existing) {
+    return existing;
+  }
+
+  const deviceId = crypto.randomUUID?.() ?? `device-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  localStorage.setItem(DEVICE_STORAGE_KEY, deviceId);
+  return deviceId;
+}
+
+export async function registerDemoVisitor(deviceId: string): Promise<{ visitorCount: number }> {
+  return request('/visitors', {
+    method: 'POST',
+    body: JSON.stringify({ deviceId })
+  });
 }
 
 export async function login(input: { email: string; password: string }): Promise<{ accessToken: string; user: User }> {

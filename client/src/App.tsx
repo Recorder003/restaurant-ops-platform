@@ -18,7 +18,9 @@ import {
   fetchOrders,
   fetchStaffUsers,
   fetchTables,
+  getOrCreateDeviceId,
   login,
+  registerDemoVisitor,
   storeToken,
   subscribeToRealtimeEvents,
   updateMenuBundle,
@@ -105,8 +107,10 @@ type SplitBill = {
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [email, setEmail] = useState('admin@example.com');
-  const [password, setPassword] = useState('Admin123!');
+  const [email, setEmail] = useState('staff@example.com');
+  const [password, setPassword] = useState('Staff123!');
+  const [isIntroOpen, setIsIntroOpen] = useState(true);
+  const [visitorCount, setVisitorCount] = useState<number | null>(null);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [menuBundles, setMenuBundles] = useState<MenuBundle[]>([]);
   const [adminMenuItems, setAdminMenuItems] = useState<MenuItem[]>([]);
@@ -187,6 +191,7 @@ function App() {
 
   useEffect(() => {
     loadSession();
+    registerVisitor();
   }, []);
 
   useEffect(() => {
@@ -261,6 +266,15 @@ function App() {
       setError(null);
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  async function registerVisitor() {
+    try {
+      const result = await registerDemoVisitor(getOrCreateDeviceId());
+      setVisitorCount(result.visitorCount);
+    } catch {
+      setVisitorCount(null);
     }
   }
 
@@ -1346,10 +1360,77 @@ function App() {
   if (!user) {
     return (
       <main className="app-shell auth-shell">
+        {isIntroOpen && (
+          <div className="modal-backdrop intro-backdrop">
+            <section className="intro-modal" role="dialog" aria-modal="true" aria-label="Project introduction">
+              <p className="eyebrow">Live Demo Guide</p>
+              <h2>Restaurant Operations Platform</h2>
+              <p>
+                This demo shows a restaurant workflow system for staff ordering, kitchen preparation,
+                table management, checkout, receipts, split payments, menu combos, and admin operations.
+              </p>
+              <a
+                className="repo-link"
+                href="https://github.com/Recorder003/restaurant-ops-platform"
+                target="_blank"
+                rel="noreferrer"
+              >
+                View GitHub repository
+              </a>
+
+              <div className="intro-highlights">
+                <span>Start with the prefilled staff account to create and manage orders.</span>
+                <span>Use the chef account to prepare individual dishes and mark them ready.</span>
+                <span>Use the admin account to manage menu items, tables, employees, and order history.</span>
+              </div>
+
+              <div className="intro-workflow">
+                <strong>Suggested demo flow</strong>
+                <ol>
+                  <li>Sign in as staff and create a dine-in order.</li>
+                  <li>Sign out, then sign in as chef to prepare the kitchen items.</li>
+                  <li>Mark dishes ready from the kitchen board.</li>
+                  <li>Sign back in as staff and mark ready dishes as served.</li>
+                  <li>Open checkout, apply a tip or split bill, then confirm payment.</li>
+                </ol>
+              </div>
+
+              <div className="intro-accounts">
+                <strong>Demo accounts</strong>
+                <span>Staff: staff@example.com / Staff123!</span>
+                <span>Chef: chef@example.com / Chef123!</span>
+                <span>Admin: admin@example.com / Admin123!</span>
+              </div>
+
+              <button className="primary-button" type="button" onClick={() => setIsIntroOpen(false)}>
+                Start Demo
+              </button>
+            </section>
+          </div>
+        )}
+
         <section className="login-panel">
           <p className="eyebrow">Restaurant Ops</p>
           <h1>Staff Sign In</h1>
-          <p className="login-copy">Use a staff or admin account to manage orders.</p>
+          <a
+            className="repo-link login-repo-link"
+            href="https://github.com/Recorder003/restaurant-ops-platform"
+            target="_blank"
+            rel="noreferrer"
+          >
+            GitHub: Recorder003/restaurant-ops-platform
+          </a>
+          <button className="subtle-button guide-button" type="button" onClick={() => setIsIntroOpen(true)}>
+            View Demo Guide
+          </button>
+
+          {visitorCount !== null && (
+            <div className="visitor-count">
+              <span>Demo visitors</span>
+              <strong>{visitorCount}</strong>
+              <small>unique browser/device visits</small>
+            </div>
+          )}
 
           {error && <div className="alert">{error}</div>}
 
@@ -1382,10 +1463,10 @@ function App() {
           </form>
 
           <div className="demo-accounts">
-            <strong>Local demo accounts</strong>
-            <span>Admin: admin@example.com / Admin123!</span>
+            <strong>Demo accounts</strong>
             <span>Staff: staff@example.com / Staff123!</span>
             <span>Chef: chef@example.com / Chef123!</span>
+            <span>Admin: admin@example.com / Admin123!</span>
           </div>
         </section>
       </main>
