@@ -78,10 +78,13 @@ async function runBrowserFlow() {
   await login(page, 'staff@example.com', 'Staff123!');
 
   await expectVisible(page.getByRole('heading', { name: 'New Order' }), 'staff new order panel');
+  await assertStaffOrderValidation(page);
   await page.getByRole('button', { name: /Dine-in/i }).click();
   await page.getByRole('button', { name: 'T1 Available 2 seats' }).click();
   await page.locator('form.order-wizard').getByRole('button', { name: 'Next' }).click();
   await page.locator('form.order-wizard').getByRole('button', { name: 'Next' }).click();
+  await page.getByRole('button', { name: 'Submit Order' }).click();
+  await expectText(page, 'Select at least one menu item before submitting.');
   await page.getByRole('button', { name: 'Entrees' }).click();
   await page.getByRole('button', { name: /^Signature Beef Noodles\s+\$13\.80/i }).click();
   await page.getByRole('button', { name: /^Grilled Chicken Rice Bowl\s+\$15\.80/i }).click();
@@ -96,12 +99,14 @@ async function runBrowserFlow() {
   await page.getByRole('button', { name: 'Start' }).click();
   await expectVisible(page.locator('.order-card-header .status.preparing'), 'preparing status badge');
   await page.getByRole('button', { name: 'Mark Done' }).click();
+  await waitForLatestOrderStatus('ready');
 
   await page.getByRole('button', { name: 'Sign Out' }).click();
 
   logStep('Serving and checking out as staff');
   await login(page, 'staff@example.com', 'Staff123!');
-  await expectVisible(page.locator('.order-card-header .status.ready'), 'ready status badge');
+  await page.getByRole('button', { name: 'Refresh' }).click();
+  await expectVisible(page.locator('.order-card-header .status.ready'), 'ready status badge', 20000);
   await page.locator('.order-actions').getByRole('button', { name: 'Served' }).click();
   await expectVisible(page.locator('.order-card-header .status.served'), 'served status badge');
 
@@ -121,6 +126,65 @@ async function runBrowserFlow() {
   const orderTotal = await getOrderTotalFromApi();
   const expectedTax = Math.round(orderTotal * TAX_RATE);
   assert(expectedTax > 0, 'Expected checkout tax to be positive');
+
+  await page.getByRole('button', { name: 'Sign Out' }).click();
+  await login(page, 'admin@example.com', 'Admin123!');
+  await assertAdminFormValidation(page);
+}
+
+async function assertStaffOrderValidation(page) {
+  logStep('Checking staff order form validation');
+
+  await page.getByRole('button', { name: /Phone pickup/i }).click();
+  await page.locator('form.order-wizard').getByRole('button', { name: 'Next' }).click();
+  await expectText(page, 'Enter the customer phone number.');
+  await page.locator('form.order-wizard').getByRole('button', { name: 'Back' }).click();
+
+  await page.getByRole('button', { name: /Dine-in/i }).click();
+  await page.locator('form.order-wizard').getByRole('button', { name: 'Next' }).click();
+  await expectText(page, 'Choose an available table before continuing.');
+
+  await page.getByRole('button', { name: 'T1 Available 2 seats' }).click();
+  await page.locator('form.order-wizard').getByRole('button', { name: 'Next' }).click();
+  await page.getByLabel('Party size').fill('0');
+  await page.locator('form.order-wizard').getByRole('button', { name: 'Next' }).click();
+  await expectText(page, 'Enter at least 1 guest.');
+  await page.getByLabel('Party size').fill('2');
+  await page.locator('form.order-wizard').getByRole('button', { name: 'Back' }).click();
+  await page.locator('form.order-wizard').getByRole('button', { name: 'Back' }).click();
+}
+
+async function assertAdminFormValidation(page) {
+  logStep('Checking admin form validation');
+
+  await expectVisible(page.getByRole('heading', { name: 'Menu Management' }), 'admin menu management panel');
+
+  await page.locator('form.menu-admin-form').getByLabel('Item').fill('');
+  await page.locator('form.menu-admin-form').getByLabel('Price').fill('0');
+  await page.getByRole('button', { name: 'Create Item' }).click();
+  await expectText(page, 'Enter the menu item name.');
+  await expectText(page, 'Enter a price greater than $0.00.');
+
+  await page.locator('form.bundle-admin-form').getByLabel('Combo *', { exact: true }).fill('');
+  await page.locator('form.bundle-admin-form').getByLabel('Price').fill('0');
+  await page.getByRole('button', { name: 'Create Combo' }).click();
+  await expectText(page, 'Enter the combo name.');
+  await expectText(page, 'Enter a combo price greater than $0.00.');
+  await expectText(page, 'Choose at least one item for this combo.');
+
+  await page.locator('form.table-admin-form').getByLabel('Table').fill('');
+  await page.locator('form.table-admin-form').getByLabel('Seats').fill('0');
+  await page.getByRole('button', { name: 'Create Table' }).click();
+  await expectText(page, 'Enter the table name.');
+  await expectText(page, 'Seats must be at least 1.');
+
+  await page.locator('form.staff-form').getByLabel('Name').fill('');
+  await page.locator('form.staff-form').getByLabel('Email').fill('bad-email');
+  await page.locator('form.staff-form').getByLabel('Password').fill('short');
+  await page.getByRole('button', { name: 'Create User' }).click();
+  await expectText(page, 'Enter the employee name.');
+  await expectText(page, 'Enter a valid email address.');
+  await expectText(page, 'Password must be at least 8 characters.');
 }
 
 function logStep(message) {
@@ -138,7 +202,32 @@ async function getOrderTotalFromApi() {
   return body.orders[0].totalCents;
 }
 
+async function waitForLatestOrderStatus(status) {
+  const token = await loginApi('admin@example.com', 'Admin123!');
+  const deadline = Date.now() + 20000;
+
+  while (Date.now() < deadline) {
+    const response = await fetch(`${API_URL}/orders?page=1&limit=1`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const body = await response.json();
+
+    if (response.status === 200 && body.orders[0]?.status === status) {
+      return;
+    }
+
+    await delay(500);
+  }
+
+  throw new Error(`Expected latest order to become ${status}`);
+}
+
 async function login(page, email, password) {
+  const startDemoButton = page.getByRole('button', { name: 'Start Demo' });
+  if (await startDemoButton.isVisible().catch(() => false)) {
+    await startDemoButton.click();
+  }
+
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign In' }).click();
@@ -156,8 +245,8 @@ async function loginApi(email, password) {
   return body.accessToken;
 }
 
-async function expectVisible(locator, label) {
-  await locator.waitFor({ state: 'visible', timeout: 10000 }).catch((error) => {
+async function expectVisible(locator, label, timeout = 10000) {
+  await locator.waitFor({ state: 'visible', timeout }).catch((error) => {
     throw new Error(`Expected ${label} to be visible: ${error.message}`);
   });
 }

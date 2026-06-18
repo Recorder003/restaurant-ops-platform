@@ -96,6 +96,13 @@ export type OrderPayment = {
   itemIds: string[];
 };
 
+export type SplitBill = {
+  id: string;
+  label: string;
+  itemIds: string[];
+  amountCents?: number;
+};
+
 export type Order = {
   id: string;
   orderSource: OrderSource;

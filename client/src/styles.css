@@ -494,13 +494,19 @@ h3 {
   min-height: 56px;
 }
 
-.party-picker strong {
+.party-picker input {
   background: #f2eee7;
+  border: 1px solid transparent;
   border-radius: 8px;
-  display: block;
   font-size: 2rem;
+  font-weight: 900;
   padding: 10px;
   text-align: center;
+}
+
+.party-picker.has-error input {
+  border-color: #b43c2f;
+  box-shadow: 0 0 0 3px rgba(180, 60, 47, 0.12);
 }
 
 .wizard-nav {
@@ -639,6 +645,11 @@ label {
   gap: 6px;
 }
 
+.required-mark {
+  color: #b43c2f;
+  font-weight: 900;
+}
+
 input,
 select,
 textarea {
@@ -652,6 +663,32 @@ textarea {
 
 textarea {
   resize: vertical;
+}
+
+.has-error input,
+.has-error select,
+.has-error textarea {
+  border-color: #b43c2f;
+  box-shadow: 0 0 0 3px rgba(180, 60, 47, 0.12);
+}
+
+.field-error {
+  background: #fff7ed;
+  border: 1px solid #f3c793;
+  border-radius: 6px;
+  color: #9a3412;
+  font-size: 0.86rem;
+  font-weight: 800;
+  outline: none;
+  padding: 8px 10px;
+}
+
+.menu-error {
+  margin-bottom: 8px;
+}
+
+.bundle-error {
+  grid-column: 1 / -1;
 }
 
 .menu-list {

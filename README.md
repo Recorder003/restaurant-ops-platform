@@ -222,6 +222,12 @@ Run the API integration test suite with:
 npm.cmd run test
 ```
 
+Run the client unit tests for extracted business rules with:
+
+```bash
+npm.cmd run test:unit
+```
+
 Run the browser end-to-end workflow test with:
 
 ```bash
@@ -254,6 +260,7 @@ GitHub Actions runs the project quality gate on pushes and pull requests:
 
 - `npm run typecheck`
 - `npm run build`
+- `npm run test:unit`
 - `npm run test`
 - `npm run test:e2e`
 

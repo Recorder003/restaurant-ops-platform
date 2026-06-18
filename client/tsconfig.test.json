@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "../.tmp/client-unit",
+    "rootDir": "./src",
+    "tsBuildInfoFile": "../.tmp/client-unit.tsbuildinfo"
+  },
+  "include": ["src/types.ts", "src/utils/**/*.ts"]
+}
