@@ -354,6 +354,7 @@ test('order filters translate role-specific defaults into API parameters', () =>
 
   assert.equal(getDefaultStatusFilter('staff', 'all'), 'active');
   assert.equal(getDefaultStatusFilter('chef', 'ready'), 'all');
+  assert.equal(getDefaultStatusFilter('admin', 'active'), 'all');
   assert.equal(doesOrderMatchCurrentStatusFilter({ ...baseOrder, status: 'served', paymentStatus: 'paid' }, 'active'), false);
   assert.equal(doesOrderMatchCurrentStatusFilter({ ...baseOrder, status: 'ready', paymentStatus: 'unpaid' }, 'active'), true);
   assert.deepEqual(toOrderApiFilters(baseFilters, staffUser), {

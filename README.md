@@ -31,6 +31,19 @@ The app currently includes:
 - Frontend session expiry handling, request reference errors, and duplicate-submit protection
 - API integration tests, browser E2E tests, and GitHub Actions CI
 
+## Recent Engineering Improvements
+
+The frontend was refactored from a large `App.tsx`-centered implementation into smaller hooks, context providers, workspace sections, and order-entry components. This makes the app easier to read, extend, and test.
+
+Recent quality improvements include:
+
+- Extracted app state orchestration into reusable hooks and context providers
+- Split the operational workspace into focused admin, staff, chef, order board, and order-entry sections
+- Broke the order-entry workflow into tested staff wizard steps, admin form sections, and menu picker components
+- Added component-level tests for workflow steps, menu selection, admin order fields, workspace sections, auth screens, modals, and order cards
+- Improved order item row layout stability so status updates do not move controls around during staff and chef workflows
+- Increased client test coverage to 31 test files and 155 passing component/unit tests
+
 ## Why This Project
 
 Many beginner full-stack projects focus mainly on building pages and basic CRUD features. Real-world software engineering requires more than that.
@@ -222,7 +235,7 @@ Run the API integration test suite with:
 npm.cmd run test
 ```
 
-Run the client unit tests for extracted business rules with:
+Run the client unit and component tests with:
 
 ```bash
 npm.cmd run test:unit
@@ -240,7 +253,9 @@ Run the local API performance benchmark with:
 npm.cmd run test:perf
 ```
 
-The test command starts the local Docker PostgreSQL container, builds the server, initializes a separate PostgreSQL database named `restaurant_orders_test`, starts the API on port `4100`, and verifies the core restaurant workflow: authentication, table occupancy, party size limits, role permissions, kitchen status transitions, checkout, order history, table cleaning, and sold-out item protection.
+The client test suite covers extracted business rules, hooks, context providers, and React components such as auth screens, order cards, order-entry steps, admin form sections, workspace sections, modals, and menu selection.
+
+The API test command starts the local Docker PostgreSQL container, builds the server, initializes a separate PostgreSQL database named `restaurant_orders_test`, starts the API on port `4100`, and verifies the core restaurant workflow: authentication, table occupancy, party size limits, role permissions, kitchen status transitions, checkout, order history, table cleaning, and sold-out item protection.
 
 The test database is reset by the test command and does not affect the normal local development database.
 

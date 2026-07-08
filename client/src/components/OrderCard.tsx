@@ -76,8 +76,8 @@ export function OrderCard({
 
           return (
             <li key={item.id} className="order-item-row">
-              <div>
-                <span>{formatOrderItemName(item)}</span>
+              <div className="order-item-details">
+                <span className="order-item-name">{formatOrderItemName(item)}</span>
                 <small>{formatMoney(item.priceCents * item.quantity)}{item.paymentId ? ' / Paid' : ''}</small>
               </div>
               <div className="order-item-controls">
@@ -90,7 +90,7 @@ export function OrderCard({
                     {getItemActionLabel(item, role)}
                   </button>
                 )}
-                {!nextItemStatus && <span className="item-action-spacer" />}
+                {!nextItemStatus && <span aria-hidden="true" className="item-action-spacer" />}
               </div>
             </li>
           );

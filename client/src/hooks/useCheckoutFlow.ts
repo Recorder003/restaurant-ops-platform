@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { checkoutOrder } from '../api';
 import { centsToDollarsInput, dollarsToCents } from '../utils/formatters';
 import {
   arraysHaveSameItems,
@@ -11,9 +12,10 @@ import type { Order, PaymentMethod, SplitBill } from '../types';
 type CheckoutFlowInput = {
   taxRate: number;
   onError: (message: string | null) => void;
+  onOrderUpdated: (order: Order) => void;
 };
 
-export function useCheckoutFlow({ taxRate, onError }: CheckoutFlowInput) {
+export function useCheckoutFlow({ taxRate, onError, onOrderUpdated }: CheckoutFlowInput) {
   const [checkoutTarget, setCheckoutTarget] = useState<Order | null>(null);
   const [checkoutPaymentMethod, setCheckoutPaymentMethod] = useState<PaymentMethod>('card');
   const [checkoutTip, setCheckoutTip] = useState('0.00');
@@ -23,6 +25,7 @@ export function useCheckoutFlow({ taxRate, onError }: CheckoutFlowInput) {
   const [splitBills, setSplitBills] = useState<SplitBill[]>([]);
   const [activeSplitBillId, setActiveSplitBillId] = useState<string | null>(null);
   const [splitPlansByOrderId, setSplitPlansByOrderId] = useState<Record<string, SplitBill[]>>({});
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
 
   const checkoutUnpaidItems = useMemo(() => {
     return checkoutTarget?.items.filter((item) => !item.paymentId) ?? [];
@@ -299,6 +302,36 @@ export function useCheckoutFlow({ taxRate, onError }: CheckoutFlowInput) {
     saveSplitPlan(updatedOrder.id, nextBills);
   }
 
+  async function handleCheckoutSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!checkoutTarget) return;
+    if (checkoutSelectedItemIds.length === 0 && !isActiveAmountSplit) {
+      onError('Please select at least one unpaid item to checkout');
+      return;
+    }
+
+    try {
+      setIsCheckingOut(true);
+      const updated = await checkoutOrder(checkoutTarget.id, {
+        paymentMethod: checkoutPaymentMethod,
+        ...(isActiveAmountSplit ? {} : { orderItemIds: checkoutSelectedItemIds }),
+        subtotalCents: checkoutSubtotalCents,
+        taxCents: checkoutTaxCents,
+        tipCents: checkoutTipCents,
+        totalCents: checkoutTotalCents
+      });
+      onOrderUpdated(updated);
+      resetTip();
+      if (updated.paymentStatus === 'paid') completePaidCheckout(updated.id);
+      else continueSplitCheckout(updated);
+      onError(null);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : 'Failed to checkout order');
+    } finally {
+      setIsCheckingOut(false);
+    }
+  }
+
   return {
     checkoutTarget,
     checkoutPaymentMethod,
@@ -316,6 +349,7 @@ export function useCheckoutFlow({ taxRate, onError }: CheckoutFlowInput) {
     checkoutTaxCents,
     checkoutTipCents,
     checkoutTotalCents,
+    isCheckingOut,
     setCheckoutPaymentMethod,
     setActiveSplitBillId,
     setIsSplitBillOpen,
@@ -335,6 +369,7 @@ export function useCheckoutFlow({ taxRate, onError }: CheckoutFlowInput) {
     handleApplyActiveSplitBill,
     resetTip,
     completePaidCheckout,
-    continueSplitCheckout
+    continueSplitCheckout,
+    handleCheckoutSubmit
   };
 }

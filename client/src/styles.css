@@ -1179,10 +1179,21 @@ li {
 }
 
 .order-item-row {
-  align-items: center;
+  align-items: stretch;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(0, 1fr) 96px 110px;
+  grid-template-columns: minmax(140px, 1fr) 104px 116px;
+  min-height: 58px;
+}
+
+.order-item-details {
+  align-self: center;
+  min-width: 0;
+}
+
+.order-item-name {
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .order-item-row small {
@@ -1198,19 +1209,25 @@ li {
 }
 
 .order-item-controls .status {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
   justify-self: end;
+  min-height: 30px;
   text-align: center;
-  width: max-content;
+  width: 96px;
 }
 
 .order-item-controls button {
+  min-height: 44px;
   justify-self: end;
-  width: 110px;
+  width: 116px;
 }
 
 .order-item-controls .item-action-spacer {
   display: block;
-  width: 110px;
+  min-height: 44px;
+  width: 116px;
 }
 
 .order-item-controls {

@@ -32,6 +32,10 @@ export function getDefaultStatusFilter(role?: UserRole, current?: OrderFilterSta
     return current && isKitchenStatus(current) ? current : 'all';
   }
 
+  if (role === 'admin') {
+    return current && current !== 'active' ? current : 'all';
+  }
+
   return current ?? 'all';
 }
 

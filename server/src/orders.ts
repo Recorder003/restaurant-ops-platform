@@ -232,6 +232,7 @@ router.get('/', requireRole('staff', 'admin', 'chef'), async (req, res, next) =>
               'isKitchenItem', mi.category != 'Drinks',
               'paymentId', opi.payment_id
             )
+            ORDER BY oi.id
           ) FILTER (WHERE oi.id IS NOT NULL),
           '[]'
         ) AS items,
@@ -956,6 +957,7 @@ async function getOrderById(id: string) {
               'isKitchenItem', mi.category != 'Drinks',
               'paymentId', opi.payment_id
             )
+            ORDER BY oi.id
           ) FILTER (WHERE oi.id IS NOT NULL),
           '[]'
         ) AS items,
