@@ -31,8 +31,15 @@ describe('useOrderBoard', () => {
       nextFilters = result.current.prepareFiltersForRole(chefUser);
     });
 
-    expect(nextFilters).toMatchObject({ status: 'all', page: 1 });
+    expect(nextFilters).toMatchObject({ status: 'all', page: 1, limit: 8 });
     expect(result.current.filters.status).toBe('all');
+  });
+
+  it('limits admin order pages to four orders', () => {
+    const { result } = renderOrderBoardHook(adminUser);
+
+    expect(result.current.filters).toMatchObject({ status: 'all', page: 1, limit: 4 });
+    expect(result.current.pagination).toMatchObject({ page: 1, limit: 4 });
   });
 
   it('loads only the order list when filters change', async () => {
@@ -177,10 +184,10 @@ describe('useOrderBoard', () => {
       fromDate: '2026-01-01',
       toDate: '2026-01-02',
       page: 1,
-      limit: 8
+      limit: 4
     });
-    expect(api.fetchOrders).toHaveBeenNthCalledWith(2, { page: 1, limit: 8 });
-    expect(api.fetchOrders).toHaveBeenNthCalledWith(3, { page: 3, limit: 8 });
+    expect(api.fetchOrders).toHaveBeenNthCalledWith(2, { page: 1, limit: 4 });
+    expect(api.fetchOrders).toHaveBeenNthCalledWith(3, { page: 3, limit: 4 });
   });
 
   it('surfaces load and status update failures', async () => {

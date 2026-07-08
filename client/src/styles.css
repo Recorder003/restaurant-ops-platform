@@ -270,7 +270,7 @@ h3 {
 }
 
 .kitchen-layout .order-grid {
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(430px, 1fr));
 }
 
 .staff-layout {
@@ -899,7 +899,7 @@ textarea {
   display: grid;
   gap: 10px;
   grid-column: 1 / -1;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
 }
 
 .bundle-component-picker label,
@@ -917,9 +917,9 @@ textarea {
 .bundle-component-picker span,
 .bundle-component-grid span {
   color: #1f2933;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .bundle-admin-list {
@@ -1179,10 +1179,10 @@ li {
 }
 
 .order-item-row {
-  align-items: stretch;
+  align-items: center;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(140px, 1fr) 104px 116px;
+  grid-template-columns: minmax(0, 1fr) 92px 112px;
   min-height: 58px;
 }
 
@@ -1210,24 +1210,27 @@ li {
 
 .order-item-controls .status {
   align-items: center;
+  align-self: center;
   display: inline-flex;
   justify-content: center;
   justify-self: end;
   min-height: 30px;
   text-align: center;
-  width: 96px;
+  width: 88px;
 }
 
 .order-item-controls button {
+  align-self: center;
   min-height: 44px;
   justify-self: end;
-  width: 116px;
+  width: 112px;
 }
 
 .order-item-controls .item-action-spacer {
+  align-self: center;
   display: block;
   min-height: 44px;
-  width: 116px;
+  width: 112px;
 }
 
 .order-item-controls {

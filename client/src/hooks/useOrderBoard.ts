@@ -32,22 +32,30 @@ type UseOrderBoardOptions = {
   onChefOrderReady: () => void;
 };
 
-const initialFilters: OrderFilterState = {
-  status: 'active',
-  tableNumber: '',
-  serverName: '',
-  fromDate: '',
-  toDate: '',
-  page: 1,
-  limit: 8
-};
+function getOrderPageLimitForRole(role?: User['role']) {
+  return role === 'admin' ? 4 : 8;
+}
 
-const initialPagination: OrderPagination = {
-  page: 1,
-  limit: 8,
-  total: 0,
-  totalPages: 0
-};
+function createInitialFilters(role?: User['role']): OrderFilterState {
+  return {
+    status: getDefaultStatusFilter(role),
+    tableNumber: '',
+    serverName: '',
+    fromDate: '',
+    toDate: '',
+    page: 1,
+    limit: getOrderPageLimitForRole(role)
+  };
+}
+
+function createInitialPagination(role?: User['role']): OrderPagination {
+  return {
+    page: 1,
+    limit: getOrderPageLimitForRole(role),
+    total: 0,
+    totalPages: 0
+  };
+}
 
 export function useOrderBoard({
   user,
@@ -56,8 +64,8 @@ export function useOrderBoard({
   onChefOrderReady
 }: UseOrderBoardOptions) {
   const [orders, setOrders] = useState<Order[]>([]);
-  const [filters, setFilters] = useState<OrderFilterState>(initialFilters);
-  const [pagination, setPagination] = useState<OrderPagination>(initialPagination);
+  const [filters, setFilters] = useState<OrderFilterState>(() => createInitialFilters(user?.role));
+  const [pagination, setPagination] = useState<OrderPagination>(() => createInitialPagination(user?.role));
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [processingOrderActionId, setProcessingOrderActionId] = useState<string | null>(null);
   const [processingItemActionId, setProcessingItemActionId] = useState<string | null>(null);
@@ -69,16 +77,18 @@ export function useOrderBoard({
 
   function clearOrders() {
     setOrders([]);
-    setPagination(initialPagination);
+    setPagination(createInitialPagination(user?.role));
     setProcessingOrderActionId(null);
     setProcessingItemActionId(null);
   }
 
   function prepareFiltersForRole(nextUser: User) {
+    const limit = getOrderPageLimitForRole(nextUser.role);
     const nextFilters = {
       ...filters,
       status: getDefaultStatusFilter(nextUser.role, filters.status),
-      page: 1
+      page: 1,
+      limit
     };
     setFilters(nextFilters);
     return nextFilters;
@@ -167,7 +177,7 @@ export function useOrderBoard({
       fromDate: '',
       toDate: '',
       page: 1,
-      limit: filters.limit
+      limit: getOrderPageLimitForRole(user?.role)
     };
     setFilters(nextFilters);
     await reloadOrders(nextFilters);
