@@ -5,6 +5,7 @@ import type { useAdminFormValidation } from '../hooks/useAdminFormValidation';
 import type { useMenuManagement } from '../hooks/useMenuManagement';
 import type { useStaffManagement } from '../hooks/useStaffManagement';
 import type { useTableManagement } from '../hooks/useTableManagement';
+import { useAdminDailySummary } from '../hooks/useAdminDailySummary';
 import type { MenuBundle, MenuItem, RestaurantTable, User } from '../types';
 import { dollarsToCents, formatMoney } from '../utils/formatters';
 import {
@@ -15,6 +16,7 @@ import {
 } from '../utils/menuUtils';
 import { isProtectedDefaultTable } from '../utils/tableUtils';
 import { isProtectedDefaultUser } from '../utils/userUtils';
+import { AdminDailySummaryPanel } from './AdminDailySummaryPanel';
 import { MenuManagementPanel } from './MenuManagementPanel';
 import { StaffManagementPanel } from './StaffManagementPanel';
 import { TableManagementPanel } from './TableManagementPanel';
@@ -45,9 +47,17 @@ export function AdminManagementSections({
   staffUsers
 }: AdminManagementSectionsProps) {
   const menuVariantOptions = useMemo(() => getMenuVariantOptions(menuItems), [menuItems]);
+  const adminDailySummary = useAdminDailySummary();
 
   return (
     <>
+      <AdminDailySummaryPanel
+        dailySummary={adminDailySummary.dailySummary}
+        error={adminDailySummary.dailySummaryError}
+        isLoading={adminDailySummary.isLoadingDailySummary}
+        onGenerate={adminDailySummary.loadDailySummary}
+      />
+
       <MenuManagementPanel
         menuCategories={menuCategories}
         menuItems={menuItems}

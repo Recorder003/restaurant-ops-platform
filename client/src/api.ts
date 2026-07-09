@@ -1,4 +1,5 @@
 import type {
+  AdminDailySummary,
   DraftItem,
   FulfillmentType,
   MenuBundle,
@@ -173,6 +174,12 @@ export async function deleteTable(id: string): Promise<void> {
 
 export async function fetchStaffUsers(): Promise<User[]> {
   return request('/admin/staff', {
+    token: getStoredToken()
+  });
+}
+
+export async function fetchAdminDailySummary(): Promise<AdminDailySummary> {
+  return request('/admin/ai/daily-summary', {
     token: getStoredToken()
   });
 }

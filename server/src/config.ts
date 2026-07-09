@@ -8,7 +8,9 @@ export const config = {
   port: Number(process.env.PORT ?? 4000),
   databaseUrl: process.env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/restaurant_orders',
   clientOrigin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
-  authTokenSecret: process.env.AUTH_TOKEN_SECRET ?? 'dev-only-change-me'
+  authTokenSecret: process.env.AUTH_TOKEN_SECRET ?? 'dev-only-change-me',
+  openaiApiKey: process.env.OPENAI_API_KEY,
+  aiSummaryModel: process.env.AI_SUMMARY_MODEL ?? 'gpt-4o-mini'
 };
 
 if (config.nodeEnv === 'production') {

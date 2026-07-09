@@ -168,3 +168,37 @@ export type OrderListResponse = {
     totalPages: number;
   };
 };
+
+export type AdminDailySummary = {
+  generatedAt: string;
+  source: 'ai' | 'rules';
+  summary: string;
+  highlights: string[];
+  recommendations: string[];
+  metrics: {
+    orderCount: number;
+    activeOrderCount: number;
+    cancelledCount: number;
+    paidOrderCount: number;
+    unpaidOrderCount: number;
+    paidRevenueCents: number;
+    averagePaidOrderCents: number;
+    dineInCount: number;
+    toGoCount: number;
+    phoneOrderCount: number;
+    activeOver20MinCount: number;
+  };
+  topItems: Array<{
+    name: string;
+    quantity: number;
+    revenueCents: number;
+  }>;
+  statusCounts: Array<{
+    status: OrderStatus;
+    count: number;
+  }>;
+  kitchenQueue: Array<{
+    status: OrderItemStatus;
+    count: number;
+  }>;
+};
