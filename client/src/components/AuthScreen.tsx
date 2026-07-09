@@ -104,8 +104,8 @@ function IntroModal({ onClose }: { onClose: () => void }) {
         <p className="eyebrow">Live Demo Guide</p>
         <h2>Restaurant Operations Platform</h2>
         <p>
-          This demo shows a restaurant workflow system for staff ordering, kitchen preparation,
-          table management, checkout, receipts, split payments, menu combos, and admin operations.
+          A full-stack restaurant operations demo for ordering, kitchen workflow, checkout,
+          split payments, menu/admin tools, and AI-assisted manager insights.
         </p>
         <a
           className="repo-link"
@@ -117,19 +117,18 @@ function IntroModal({ onClose }: { onClose: () => void }) {
         </a>
 
         <div className="intro-highlights">
-          <span>Start with the prefilled staff account to create and manage orders.</span>
-          <span>Use the chef account to prepare individual dishes and mark them ready.</span>
-          <span>Use the admin account to manage menu items, tables, employees, and order history.</span>
+          <span>Staff: create orders, serve ready items, and checkout.</span>
+          <span>Chef: prepare individual dishes and mark them ready.</span>
+          <span>Admin: manage data and generate AI Daily Summary at the top of Admin Management.</span>
         </div>
 
         <div className="intro-workflow">
           <strong>Suggested demo flow</strong>
           <ol>
             <li>Sign in as staff and create a dine-in order.</li>
-            <li>Sign out, then sign in as chef to prepare the kitchen items.</li>
-            <li>Mark dishes ready from the kitchen board.</li>
-            <li>Sign back in as staff and mark ready dishes as served.</li>
-            <li>Open checkout, apply a tip or split bill, then confirm payment.</li>
+            <li>Use chef to prepare and mark dishes ready.</li>
+            <li>Return to staff to serve items and checkout.</li>
+            <li>Use admin to view AI Daily Summary.</li>
           </ol>
         </div>
 

@@ -39,6 +39,7 @@ describe('AuthScreen', () => {
       'href',
       'https://github.com/Recorder003/restaurant-ops-platform'
     );
+    expect(screen.getByText(/generate AI Daily Summary at the top of Admin Management/)).toBeInTheDocument();
   });
 
   it('forwards login form edits, submit, and guide commands', async () => {
