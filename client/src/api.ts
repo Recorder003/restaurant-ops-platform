@@ -1,5 +1,6 @@
 import type {
   AdminDailySummary,
+  AdminManagerDashboard,
   DraftItem,
   FulfillmentType,
   MenuBundle,
@@ -180,6 +181,12 @@ export async function fetchStaffUsers(): Promise<User[]> {
 
 export async function fetchAdminDailySummary(): Promise<AdminDailySummary> {
   return request('/admin/ai/daily-summary', {
+    token: getStoredToken()
+  });
+}
+
+export async function fetchAdminManagerDashboard(): Promise<AdminManagerDashboard> {
+  return request('/admin/manager-dashboard', {
     token: getStoredToken()
   });
 }

@@ -6,6 +6,7 @@ import type { useMenuManagement } from '../hooks/useMenuManagement';
 import type { useStaffManagement } from '../hooks/useStaffManagement';
 import type { useTableManagement } from '../hooks/useTableManagement';
 import { useAdminDailySummary } from '../hooks/useAdminDailySummary';
+import { useAdminManagerDashboard } from '../hooks/useAdminManagerDashboard';
 import type { MenuBundle, MenuItem, RestaurantTable, User } from '../types';
 import { dollarsToCents, formatMoney } from '../utils/formatters';
 import {
@@ -17,6 +18,7 @@ import {
 import { isProtectedDefaultTable } from '../utils/tableUtils';
 import { isProtectedDefaultUser } from '../utils/userUtils';
 import { AdminDailySummaryPanel } from './AdminDailySummaryPanel';
+import { AdminManagerDashboardPanel } from './AdminManagerDashboardPanel';
 import { MenuManagementPanel } from './MenuManagementPanel';
 import { StaffManagementPanel } from './StaffManagementPanel';
 import { TableManagementPanel } from './TableManagementPanel';
@@ -32,6 +34,7 @@ type AdminManagementSectionsProps = {
   menuBundles: MenuBundle[];
   tables: RestaurantTable[];
   staffUsers: User[];
+  dataRefreshVersion: number;
 };
 
 export function AdminManagementSections({
@@ -44,16 +47,28 @@ export function AdminManagementSections({
   menuItems,
   menuBundles,
   tables,
-  staffUsers
+  staffUsers,
+  dataRefreshVersion
 }: AdminManagementSectionsProps) {
   const menuVariantOptions = useMemo(() => getMenuVariantOptions(menuItems), [menuItems]);
-  const adminDailySummary = useAdminDailySummary();
+  const adminManagerDashboard = useAdminManagerDashboard(dataRefreshVersion);
+  const adminDailySummary = useAdminDailySummary(dataRefreshVersion);
 
   return (
     <>
+      <AdminManagerDashboardPanel
+        dashboard={adminManagerDashboard.managerDashboard}
+        error={adminManagerDashboard.managerDashboardError}
+        isLoading={adminManagerDashboard.isLoadingManagerDashboard}
+        isRefreshing={adminManagerDashboard.isRefreshingManagerDashboard}
+        lastRefreshAt={adminManagerDashboard.lastDashboardRefreshAt}
+        onRefresh={adminManagerDashboard.loadManagerDashboard}
+      />
+
       <AdminDailySummaryPanel
         dailySummary={adminDailySummary.dailySummary}
         error={adminDailySummary.dailySummaryError}
+        isStale={adminDailySummary.isDailySummaryStale}
         isLoading={adminDailySummary.isLoadingDailySummary}
         onGenerate={adminDailySummary.loadDailySummary}
       />

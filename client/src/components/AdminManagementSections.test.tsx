@@ -11,6 +11,33 @@ import { createAdminUser, createMenuItem } from '../test/factories';
 const adminUser = createAdminUser();
 const menuItem = createMenuItem();
 
+vi.mock('../api', async () => {
+  const actual = await vi.importActual<typeof import('../api')>('../api');
+
+  return {
+    ...actual,
+    fetchAdminManagerDashboard: vi.fn(async () => ({
+      generatedAt: '2026-07-19T16:30:00.000Z',
+      metrics: {
+        orderCount: 0,
+        activeOrderCount: 0,
+        cancelledCount: 0,
+        paidOrderCount: 0,
+        unpaidOrderCount: 0,
+        paidRevenueCents: 0,
+        averagePaidOrderCents: 0,
+        dineInCount: 0,
+        toGoCount: 0,
+        phoneOrderCount: 0,
+        activeOver20MinCount: 0
+      },
+      topItems: [],
+      statusCounts: [],
+      kitchenQueue: []
+    }))
+  };
+});
+
 describe('AdminManagementSections', () => {
   it('renders all admin management panels and wires form field changes', () => {
     const setNewMenuName = vi.fn();
@@ -29,11 +56,13 @@ describe('AdminManagementSections', () => {
       menuBundles={[]}
       tables={[]}
       staffUsers={[adminUser]}
+      dataRefreshVersion={0}
     />);
 
     expect(screen.getByRole('heading', { name: 'Menu Management' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Table Management' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Staff Management' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Manager Dashboard' })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/Item/), { target: { value: 'Soup' } });
     expect(setNewMenuName).toHaveBeenCalledWith('Soup');

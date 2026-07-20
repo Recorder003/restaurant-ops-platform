@@ -9,6 +9,7 @@ type AdminWorkspaceSectionProps = {
   restaurantTables: RestaurantTable[];
   staffUsers: User[];
   adminManagement: ReturnType<typeof useAdminManagement>;
+  dataRefreshVersion: number;
 };
 
 export function AdminWorkspaceSection({
@@ -17,7 +18,8 @@ export function AdminWorkspaceSection({
   menuBundles,
   restaurantTables,
   staffUsers,
-  adminManagement
+  adminManagement,
+  dataRefreshVersion
 }: AdminWorkspaceSectionProps) {
   return (
     <AdminManagementSections
@@ -31,6 +33,7 @@ export function AdminWorkspaceSection({
       menuBundles={menuBundles}
       tables={restaurantTables}
       staffUsers={staffUsers}
+      dataRefreshVersion={dataRefreshVersion}
     />
   );
 }

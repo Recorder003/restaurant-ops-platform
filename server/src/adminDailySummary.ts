@@ -61,6 +61,10 @@ type AdminDailySummaryResponse = DailyNarrative & DailySummaryData & {
   source: 'ai' | 'rules';
 };
 
+type AdminManagerDashboardResponse = DailySummaryData & {
+  generatedAt: string;
+};
+
 type OpenAiResponse = {
   output_text?: string;
   output?: Array<{
@@ -84,6 +88,13 @@ export async function getAdminDailySummary(): Promise<AdminDailySummaryResponse>
     topItems: summaryData.topItems,
     statusCounts: summaryData.statusCounts,
     kitchenQueue: summaryData.kitchenQueue
+  };
+}
+
+export async function getAdminManagerDashboard(): Promise<AdminManagerDashboardResponse> {
+  return {
+    generatedAt: new Date().toISOString(),
+    ...(await getDailySummaryData())
   };
 }
 

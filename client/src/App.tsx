@@ -23,6 +23,7 @@ function AppContent() {
     documents,
     checkout,
     adminManagement,
+    dataRefreshVersion,
     refreshData
   } = useRestaurantApp();
 
@@ -53,6 +54,7 @@ function AppContent() {
           documents={documents}
           checkout={checkout}
           adminManagement={adminManagement}
+          dataRefreshVersion={dataRefreshVersion}
           onRefresh={refreshData}
         />
 

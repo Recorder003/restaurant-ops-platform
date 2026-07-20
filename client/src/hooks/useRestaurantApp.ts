@@ -2,6 +2,7 @@ import {
   extraChairsAllowed,
   taxRate
 } from '../config/appConfig';
+import { useState } from 'react';
 import { useAppError } from '../context/AppErrorContext';
 import { useAdminManagement } from './useAdminManagement';
 import { useAuthSession } from './useAuthSession';
@@ -16,6 +17,7 @@ import type { User } from '../types';
 
 export function useRestaurantApp() {
   const { error, setError } = useAppError();
+  const [dataRefreshVersion, setDataRefreshVersion] = useState(0);
   const checkout = useCheckoutFlow({ taxRate, onError: setError, onOrderUpdated: (order) => updateOrderInList(order) });
   const { resetCheckoutState } = checkout;
   const authSession = useAuthSession({
@@ -105,7 +107,9 @@ export function useRestaurantApp() {
     clearScheduledRefreshes
   } = useRefreshScheduler({
     onRefresh: () => {
-      loadData(user, orderFilters, { silent: true });
+      void Promise.resolve(loadData(user, orderFilters, { silent: true })).finally(() => {
+        setDataRefreshVersion((version) => version + 1);
+      });
     }
   });
 
@@ -143,6 +147,10 @@ export function useRestaurantApp() {
     documents,
     checkout,
     adminManagement,
-    refreshData: () => loadData()
+    dataRefreshVersion,
+    refreshData: async () => {
+      await Promise.resolve(loadData());
+      setDataRefreshVersion((version) => version + 1);
+    }
   };
 }

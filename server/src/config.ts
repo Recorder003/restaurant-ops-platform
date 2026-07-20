@@ -10,7 +10,9 @@ export const config = {
   clientOrigin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173',
   authTokenSecret: process.env.AUTH_TOKEN_SECRET ?? 'dev-only-change-me',
   openaiApiKey: process.env.OPENAI_API_KEY,
-  aiSummaryModel: process.env.AI_SUMMARY_MODEL ?? 'gpt-4o-mini'
+  aiSummaryModel: process.env.AI_SUMMARY_MODEL ?? 'gpt-4o-mini',
+  redisUrl: process.env.REDIS_URL,
+  redisKeyPrefix: process.env.REDIS_KEY_PREFIX ?? 'restaurant-ops'
 };
 
 if (config.nodeEnv === 'production') {

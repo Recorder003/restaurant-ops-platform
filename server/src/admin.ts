@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { getAdminDailySummary } from './adminDailySummary.js';
+import { getAdminDailySummary, getAdminManagerDashboard } from './adminDailySummary.js';
 import { requireAuth, requireRole, type AuthenticatedRequest } from './authMiddleware.js';
 import { query } from './db.js';
 import { hashPassword } from './passwords.js';
@@ -27,6 +27,14 @@ const updateStaffSchema = z.object({
 router.get('/ai/daily-summary', async (_req, res, next) => {
   try {
     res.json(await getAdminDailySummary());
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/manager-dashboard', async (_req, res, next) => {
+  try {
+    res.json(await getAdminManagerDashboard());
   } catch (error) {
     next(error);
   }

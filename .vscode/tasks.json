@@ -20,7 +20,7 @@
       "problemMatcher": []
     },
     {
-      "label": "Start PostgreSQL with Docker",
+      "label": "Start PostgreSQL and Redis with Docker",
       "type": "shell",
       "command": ".\\scripts\\start-postgres.cmd",
       "problemMatcher": []

@@ -2,13 +2,17 @@ import { Router } from 'express';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 import { requireAuth, requireRole } from './authMiddleware.js';
+import { config } from './config.js';
 import { pool, query } from './db.js';
 import { broadcastRealtimeEvent } from './realtime.js';
+import { deleteCacheByPattern, getJsonCache, setJsonCache } from './redisClient.js';
 import type { MenuBundle, MenuItem } from './types.js';
 
 const router = Router();
 const menuCategories = ['Entrees', 'Vegetables', 'Small Plates', 'Drinks', 'Desserts'] as const;
 const alwaysAvailableMenuItems = new Set(['Lemon Iced Tea', 'Signature Beef Noodles']);
+const menuCachePrefix = `${config.redisKeyPrefix}:menu`;
+const menuCacheTtlSeconds = 60;
 
 class MenuInputError extends Error {}
 
@@ -42,14 +46,18 @@ const updateMenuBundleSchema = menuBundleSchema.partial().refine((value) => valu
 
 router.get('/', async (_req, res, next) => {
   try {
-    const { rows } = await query<MenuItemRow>(`
-      ${menuItemSelectSql}
-      WHERE mi.is_available = TRUE AND mi.is_sold_out = FALSE
-      GROUP BY mi.id
-      ORDER BY mi.category, mi.name
-    `);
+    const menuItems = await getCachedMenuResponse<MenuItem[]>(`${menuCachePrefix}:public-items`, async () => {
+      const { rows } = await query<MenuItemRow>(`
+        ${menuItemSelectSql}
+        WHERE mi.is_available = TRUE AND mi.is_sold_out = FALSE
+        GROUP BY mi.id
+        ORDER BY mi.category, mi.name
+      `);
 
-    res.json(rows.map(mapMenuItem));
+      return rows.map(mapMenuItem);
+    });
+
+    res.json(menuItems);
   } catch (error) {
     next(error);
   }
@@ -57,13 +65,17 @@ router.get('/', async (_req, res, next) => {
 
 router.get('/admin', requireAuth, requireRole('admin', 'chef'), async (_req, res, next) => {
   try {
-    const { rows } = await query<MenuItemRow>(`
-      ${menuItemSelectSql}
-      GROUP BY mi.id
-      ORDER BY mi.category, mi.name
-    `);
+    const menuItems = await getCachedMenuResponse<MenuItem[]>(`${menuCachePrefix}:admin-items`, async () => {
+      const { rows } = await query<MenuItemRow>(`
+        ${menuItemSelectSql}
+        GROUP BY mi.id
+        ORDER BY mi.category, mi.name
+      `);
 
-    res.json(rows.map(mapMenuItem));
+      return rows.map(mapMenuItem);
+    });
+
+    res.json(menuItems);
   } catch (error) {
     next(error);
   }
@@ -71,22 +83,26 @@ router.get('/admin', requireAuth, requireRole('admin', 'chef'), async (_req, res
 
 router.get('/bundles', async (_req, res, next) => {
   try {
-    const { rows } = await query<MenuBundleRow>(`
-      ${menuBundleSelectSql}
-      WHERE mb.is_available = TRUE AND mb.is_sold_out = FALSE
-        AND NOT EXISTS (
-          SELECT 1
-          FROM menu_bundle_items component
-          JOIN menu_item_variants component_variant ON component_variant.id = component.menu_item_variant_id
-          JOIN menu_items component_item ON component_item.id = component_variant.menu_item_id
-          WHERE component.bundle_id = mb.id
-            AND (component_item.is_available = FALSE OR component_item.is_sold_out = TRUE)
-        )
-      GROUP BY mb.id
-      ORDER BY mb.name
-    `);
+    const bundles = await getCachedMenuResponse<MenuBundle[]>(`${menuCachePrefix}:public-bundles`, async () => {
+      const { rows } = await query<MenuBundleRow>(`
+        ${menuBundleSelectSql}
+        WHERE mb.is_available = TRUE AND mb.is_sold_out = FALSE
+          AND NOT EXISTS (
+            SELECT 1
+            FROM menu_bundle_items component
+            JOIN menu_item_variants component_variant ON component_variant.id = component.menu_item_variant_id
+            JOIN menu_items component_item ON component_item.id = component_variant.menu_item_id
+            WHERE component.bundle_id = mb.id
+              AND (component_item.is_available = FALSE OR component_item.is_sold_out = TRUE)
+          )
+        GROUP BY mb.id
+        ORDER BY mb.name
+      `);
 
-    res.json(rows.map(mapMenuBundle));
+      return rows.map(mapMenuBundle);
+    });
+
+    res.json(bundles);
   } catch (error) {
     next(error);
   }
@@ -94,13 +110,17 @@ router.get('/bundles', async (_req, res, next) => {
 
 router.get('/bundles/admin', requireAuth, requireRole('admin'), async (_req, res, next) => {
   try {
-    const { rows } = await query<MenuBundleRow>(`
-      ${menuBundleSelectSql}
-      GROUP BY mb.id
-      ORDER BY mb.name
-    `);
+    const bundles = await getCachedMenuResponse<MenuBundle[]>(`${menuCachePrefix}:admin-bundles`, async () => {
+      const { rows } = await query<MenuBundleRow>(`
+        ${menuBundleSelectSql}
+        GROUP BY mb.id
+        ORDER BY mb.name
+      `);
 
-    res.json(rows.map(mapMenuBundle));
+      return rows.map(mapMenuBundle);
+    });
+
+    res.json(bundles);
   } catch (error) {
     next(error);
   }
@@ -133,6 +153,7 @@ router.post('/bundles', requireAuth, requireRole('admin'), async (req, res, next
     await client.query('COMMIT');
 
     const bundle = await getMenuBundleById(rows[0].id);
+    await invalidateMenuCache();
     broadcastRealtimeEvent({ type: 'menu_changed', action: 'bundle_created', resourceId: bundle.id });
     res.status(201).json(bundle);
   } catch (error) {
@@ -202,6 +223,7 @@ router.patch('/bundles/:id', requireAuth, requireRole('admin'), async (req, res,
     await client.query('COMMIT');
 
     const bundle = await getMenuBundleById(rows[0].id);
+    await invalidateMenuCache();
     broadcastRealtimeEvent({ type: 'menu_changed', action: 'bundle_updated', resourceId: bundle.id });
     res.json(bundle);
   } catch (error) {
@@ -241,6 +263,7 @@ router.patch('/bundles/:id/sold-out', requireAuth, requireRole('admin'), async (
     }
 
     const bundle = await getMenuBundleById(rows[0].id);
+    await invalidateMenuCache();
     broadcastRealtimeEvent({ type: 'menu_changed', action: 'bundle_sold_out_updated', resourceId: bundle.id });
     res.json(bundle);
   } catch (error) {
@@ -290,6 +313,7 @@ router.post('/', requireAuth, requireRole('admin'), async (req, res, next) => {
     );
 
     const menuItem = await getMenuItemById(rows[0].id);
+    await invalidateMenuCache();
     broadcastRealtimeEvent({ type: 'menu_changed', action: 'created', resourceId: menuItem.id });
     res.status(201).json(menuItem);
   } catch (error) {
@@ -364,6 +388,7 @@ router.patch('/:id', requireAuth, requireRole('admin'), async (req, res, next) =
     }
 
     const menuItem = await getMenuItemById(rows[0].id);
+    await invalidateMenuCache();
     broadcastRealtimeEvent({ type: 'menu_changed', action: 'updated', resourceId: menuItem.id });
     res.json(menuItem);
   } catch (error) {
@@ -410,6 +435,7 @@ router.patch('/:id/sold-out', requireAuth, requireRole('admin', 'chef'), async (
     }
 
     const menuItem = await getMenuItemById(rows[0].id);
+    await invalidateMenuCache();
     broadcastRealtimeEvent({ type: 'menu_changed', action: 'sold_out_updated', resourceId: menuItem.id });
     res.json(menuItem);
   } catch (error) {
@@ -591,6 +617,22 @@ async function replaceBundleItems(
       [bundleId, item.menuItemVariantId, item.quantity]
     );
   }
+}
+
+async function getCachedMenuResponse<T>(key: string, loadFresh: () => Promise<T>) {
+  const cached = await getJsonCache<T>(key);
+
+  if (cached) {
+    return cached;
+  }
+
+  const fresh = await loadFresh();
+  await setJsonCache(key, fresh, menuCacheTtlSeconds);
+  return fresh;
+}
+
+async function invalidateMenuCache() {
+  await deleteCacheByPattern(`${menuCachePrefix}:*`);
 }
 
 function mapMenuItem(row: MenuItemRow): MenuItem {

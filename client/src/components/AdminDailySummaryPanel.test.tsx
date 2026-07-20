@@ -28,6 +28,12 @@ describe('AdminDailySummaryPanel', () => {
     expect(screen.getByText('$120.00')).toBeInTheDocument();
     expect(screen.getByText(/Signature Beef Noodles x 3/)).toBeInTheDocument();
   });
+
+  it('warns when live data changed after the summary was generated', () => {
+    render(<AdminDailySummaryPanel dailySummary={dailySummary} error={null} isLoading={false} isStale onGenerate={() => {}} />);
+
+    expect(screen.getByText(/Live order data changed/)).toBeInTheDocument();
+  });
 });
 
 const dailySummary: AdminDailySummary = {

@@ -24,6 +24,33 @@ const staffUser = createStaffUser();
 const table = createRestaurantTable();
 const menuItem = createMenuItem({ name: 'Fried Rice', category: 'Entrees', isSoldOut: false });
 
+vi.mock('../../api', async () => {
+  const actual = await vi.importActual<typeof import('../../api')>('../../api');
+
+  return {
+    ...actual,
+    fetchAdminManagerDashboard: vi.fn(async () => ({
+      generatedAt: '2026-07-19T16:30:00.000Z',
+      metrics: {
+        orderCount: 0,
+        activeOrderCount: 0,
+        cancelledCount: 0,
+        paidOrderCount: 0,
+        unpaidOrderCount: 0,
+        paidRevenueCents: 0,
+        averagePaidOrderCents: 0,
+        dineInCount: 0,
+        toGoCount: 0,
+        phoneOrderCount: 0,
+        activeOver20MinCount: 0
+      },
+      topItems: [],
+      statusCounts: [],
+      kitchenQueue: []
+    }))
+  };
+});
+
 describe('workspace sections', () => {
   it('wires chef sold-out toggles to admin management', async () => {
     const user = userEvent.setup();
@@ -50,6 +77,7 @@ describe('workspace sections', () => {
         restaurantTables={[table]}
         staffUsers={[adminUser, staffUser]}
         adminManagement={mockAdminManagement()}
+        dataRefreshVersion={0}
       />
     );
 

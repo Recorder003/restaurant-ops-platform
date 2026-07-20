@@ -4,6 +4,7 @@ import { formatDateTime, formatMoney } from '../utils/formatters';
 type AdminDailySummaryPanelProps = {
   dailySummary: AdminDailySummary | null;
   error: string | null;
+  isStale?: boolean;
   isLoading: boolean;
   onGenerate: () => void;
 };
@@ -11,6 +12,7 @@ type AdminDailySummaryPanelProps = {
 export function AdminDailySummaryPanel({
   dailySummary,
   error,
+  isStale = false,
   isLoading,
   onGenerate
 }: AdminDailySummaryPanelProps) {
@@ -28,6 +30,10 @@ export function AdminDailySummaryPanel({
 
       {error && <p className="form-error">{error}</p>}
 
+      {dailySummary && isStale && (
+        <p className="ai-stale-notice">Live order data changed after this summary was generated. Regenerate it before using the recommendations.</p>
+      )}
+
       {!dailySummary && !error && (
         <p className="empty-state">Generate a daily summary to review revenue, active orders, kitchen queue, and suggested actions.</p>
       )}
@@ -42,6 +48,10 @@ export function AdminDailySummaryPanel({
           </div>
 
           <p className="ai-summary-text">{dailySummary.summary}</p>
+
+          <p className="ai-summary-source-note">
+            Source metrics: today&apos;s orders, payment totals, order statuses, kitchen queue, and top-selling items.
+          </p>
 
           <div className="ai-summary-metrics" aria-label="Daily metrics">
             <Metric label="Orders" value={dailySummary.metrics.orderCount.toString()} />

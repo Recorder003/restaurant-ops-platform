@@ -15,6 +15,7 @@ const ORDER_COUNTS = (process.env.PERF_ORDER_COUNTS ?? process.env.PERF_ORDER_CO
 const SAMPLE_COUNT = Number(process.env.PERF_SAMPLE_COUNT ?? 40);
 const WARMUP_COUNT = Number(process.env.PERF_WARMUP_COUNT ?? 5);
 const PAGE_LIMIT = Number(process.env.PERF_PAGE_LIMIT ?? 8);
+const REDIS_KEY_PREFIX = `restaurant-ops:perf:${Date.now()}`;
 
 let server;
 
@@ -40,6 +41,8 @@ try {
     env: {
       ...process.env,
       DATABASE_URL: PERF_DATABASE_URL,
+      REDIS_URL: process.env.PERF_REDIS_URL ?? process.env.REDIS_URL ?? 'redis://localhost:6379',
+      REDIS_KEY_PREFIX,
       PORT: String(PERF_PORT),
       CLIENT_ORIGIN: 'http://localhost:5173'
     },
@@ -52,12 +55,13 @@ try {
   logStep('Running API performance checks');
   const token = await loginForToken();
   const baselineResults = [];
+  const cacheResults = [];
   const orderResultsByDataset = [];
   let seededOrders = firstOrderCount;
 
   baselineResults.push(await measureScenario('GET /health', () => request('/health')));
-  baselineResults.push(await measureScenario('GET /menu-items', () => request('/menu-items')));
   baselineResults.push(await measureScenario('POST /auth/login', () => loginRequest()));
+  cacheResults.push(...await measureMenuCacheScenarios(token));
 
   for (const orderCount of ORDER_COUNTS) {
     if (orderCount > seededOrders) {
@@ -79,7 +83,9 @@ try {
     samplesPerScenario: SAMPLE_COUNT,
     warmupsPerScenario: WARMUP_COUNT,
     unit: 'milliseconds',
+    redisKeyPrefix: REDIS_KEY_PREFIX,
     baselineResults,
+    cacheResults,
     orderResultsByDataset
   }, null, 2));
 } catch (error) {
@@ -89,6 +95,46 @@ try {
   if (server && !server.killed) {
     server.kill('SIGTERM');
   }
+}
+
+async function measureMenuCacheScenarios(token) {
+  const editableMenuItem = await getEditableMenuItem(token);
+  const scenarios = [
+    {
+      name: 'GET /menu-items',
+      path: '/menu-items'
+    },
+    {
+      name: 'GET /menu-items/bundles',
+      path: '/menu-items/bundles'
+    }
+  ];
+  const results = [];
+
+  for (const scenario of scenarios) {
+    const cold = await measureScenario(
+      `${scenario.name} cold cache`,
+      () => request(scenario.path),
+      {
+        beforeEach: () => invalidateMenuCacheViaApi(token, editableMenuItem)
+      }
+    );
+
+    await invalidateMenuCacheViaApi(token, editableMenuItem);
+    await request(scenario.path);
+
+    const warm = await measureScenario(`${scenario.name} warm Redis cache`, () => request(scenario.path));
+
+    results.push({
+      route: scenario.name,
+      coldCache: cold,
+      warmRedisCache: warm,
+      p95ReductionPercent: calculateReductionPercent(cold.p95, warm.p95),
+      avgReductionPercent: calculateReductionPercent(cold.avg, warm.avg)
+    });
+  }
+
+  return results;
 }
 
 async function measureOrderScenarios(token, orderCount) {
@@ -123,14 +169,22 @@ async function measureOrderScenarios(token, orderCount) {
   return results;
 }
 
-async function measureScenario(name, fn) {
+async function measureScenario(name, fn, options = {}) {
   for (let index = 0; index < WARMUP_COUNT; index += 1) {
+    if (options.beforeEach) {
+      await options.beforeEach();
+    }
+
     await fn();
   }
 
   const timings = [];
 
   for (let index = 0; index < SAMPLE_COUNT; index += 1) {
+    if (options.beforeEach) {
+      await options.beforeEach();
+    }
+
     const startedAt = performance.now();
     const response = await fn();
     const durationMs = performance.now() - startedAt;
@@ -152,6 +206,37 @@ async function measureScenario(name, fn) {
     p95: round(percentile(timings, 0.95)),
     max: round(timings[timings.length - 1])
   };
+}
+
+async function getEditableMenuItem(token) {
+  const response = await request('/menu-items/admin', token);
+  const menuItems = await response.json();
+
+  if (!response.ok) {
+    throw new Error(`Admin menu lookup failed with status ${response.status}`);
+  }
+
+  const protectedNames = new Set(['Lemon Iced Tea', 'Signature Beef Noodles']);
+  const editable = menuItems.find((item) => !protectedNames.has(item.name)) ?? menuItems[0];
+
+  if (!editable) {
+    throw new Error('Performance cache test requires at least one menu item.');
+  }
+
+  return editable;
+}
+
+async function invalidateMenuCacheViaApi(token, menuItem) {
+  const response = await request(`/menu-items/${menuItem.id}`, token, {
+    method: 'PATCH',
+    body: {
+      priceCents: menuItem.priceCents
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`Menu cache invalidation update failed with status ${response.status}`);
+  }
 }
 
 async function loginForToken() {
@@ -310,6 +395,14 @@ function percentile(sortedValues, fraction) {
 
 function round(value) {
   return Math.round(value * 100) / 100;
+}
+
+function calculateReductionPercent(before, after) {
+  if (before <= 0) {
+    return 0;
+  }
+
+  return round(((before - after) / before) * 100);
 }
 
 function logStep(message) {

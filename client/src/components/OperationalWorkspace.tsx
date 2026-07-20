@@ -29,6 +29,7 @@ type OperationalWorkspaceProps = {
   documents: ReturnType<typeof useOrderDocuments>;
   checkout: ReturnType<typeof useCheckoutFlow>;
   adminManagement: ReturnType<typeof useAdminManagement>;
+  dataRefreshVersion: number;
   onRefresh: () => void;
 };
 
@@ -48,6 +49,7 @@ export function OperationalWorkspace({
   documents,
   checkout,
   adminManagement,
+  dataRefreshVersion,
   onRefresh
 }: OperationalWorkspaceProps) {
   const isBusy = isLoading || isSessionLoading;
@@ -95,6 +97,7 @@ export function OperationalWorkspace({
           restaurantTables={restaurantTables}
           staffUsers={staffUsers}
           adminManagement={adminManagement}
+          dataRefreshVersion={dataRefreshVersion}
         />
       )}
     </section>

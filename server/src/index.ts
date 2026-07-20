@@ -11,6 +11,7 @@ import menuItemsRouter from './menuItems.js';
 import ordersRouter from './orders.js';
 import { attachRequestId, logError, logRequest } from './requestLogging.js';
 import realtimeRouter from './realtime.js';
+import { closeRedisClient, pingRedis } from './redisClient.js';
 import tablesRouter from './tables.js';
 import visitorsRouter from './visitors.js';
 
@@ -37,14 +38,18 @@ app.get('/api/health', async (_req, res) => {
       ok: true,
       service: 'restaurant-order-manager',
       environment: config.nodeEnv,
-      database: 'connected'
+      database: 'connected',
+      redis: await pingRedis(),
+      aiSummary: config.openaiApiKey ? 'configured' : 'rules-fallback'
     });
   } catch {
     res.status(503).json({
       ok: false,
       service: 'restaurant-order-manager',
       environment: config.nodeEnv,
-      database: 'unavailable'
+      database: 'unavailable',
+      redis: await pingRedis(),
+      aiSummary: config.openaiApiKey ? 'configured' : 'rules-fallback'
     });
   }
 });
@@ -93,7 +98,10 @@ const server = app.listen(config.port, () => {
 
 function shutdown() {
   server.close(async () => {
-    await pool.end();
+    await Promise.all([
+      pool.end(),
+      closeRedisClient()
+    ]);
     process.exit(0);
   });
 }

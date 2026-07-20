@@ -22,6 +22,33 @@ const adminUser = createAdminUser();
 const menuItem = createMenuItem();
 const table = createRestaurantTable();
 
+vi.mock('../api', async () => {
+  const actual = await vi.importActual<typeof import('../api')>('../api');
+
+  return {
+    ...actual,
+    fetchAdminManagerDashboard: vi.fn(async () => ({
+      generatedAt: '2026-07-19T16:30:00.000Z',
+      metrics: {
+        orderCount: 0,
+        activeOrderCount: 0,
+        cancelledCount: 0,
+        paidOrderCount: 0,
+        unpaidOrderCount: 0,
+        paidRevenueCents: 0,
+        averagePaidOrderCents: 0,
+        dineInCount: 0,
+        toGoCount: 0,
+        phoneOrderCount: 0,
+        activeOver20MinCount: 0
+      },
+      topItems: [],
+      statusCounts: [],
+      kitchenQueue: []
+    }))
+  };
+});
+
 describe('OperationalWorkspace', () => {
   it('renders staff ordering and order board actions from composed state', async () => {
     const onRefresh = vi.fn();
@@ -69,6 +96,7 @@ function renderWorkspace(overrides: Partial<RenderWorkspaceOptions> = {}) {
       documents={overrides.documents ?? mockDocuments()}
       checkout={overrides.checkout ?? mockCheckout()}
       adminManagement={overrides.adminManagement ?? mockAdminManagement()}
+      dataRefreshVersion={overrides.dataRefreshVersion ?? 0}
       onRefresh={overrides.onRefresh ?? vi.fn()}
     />,
     { authSession: { user, email: user.email, isIntroOpen: false, visitorCount: 1 } }
@@ -220,5 +248,6 @@ type RenderWorkspaceOptions = {
   documents: ReturnType<typeof useOrderDocuments>;
   checkout: ReturnType<typeof useCheckoutFlow>;
   adminManagement: ReturnType<typeof useAdminManagement>;
+  dataRefreshVersion: number;
   onRefresh: () => void;
 };

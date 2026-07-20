@@ -202,3 +202,8 @@ export type AdminDailySummary = {
     count: number;
   }>;
 };
+
+export type AdminManagerDashboard = Pick<
+  AdminDailySummary,
+  'generatedAt' | 'metrics' | 'topItems' | 'statusCounts' | 'kitchenQueue'
+>;

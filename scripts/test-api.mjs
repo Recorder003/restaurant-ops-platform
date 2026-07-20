@@ -7,6 +7,7 @@ const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres:
 const TEST_PORT = Number(process.env.TEST_PORT ?? 4100);
 const API_URL = `http://127.0.0.1:${TEST_PORT}/api`;
 const TAX_RATE = 0.086;
+const REDIS_KEY_PREFIX = `restaurant-ops:test:${Date.now()}`;
 
 let server;
 
@@ -24,6 +25,8 @@ try {
     env: {
       ...process.env,
       DATABASE_URL: TEST_DATABASE_URL,
+      REDIS_URL: process.env.TEST_REDIS_URL ?? 'redis://localhost:6379',
+      REDIS_KEY_PREFIX,
       PORT: String(TEST_PORT),
       CLIENT_ORIGIN: 'http://localhost:5173'
     },
@@ -57,6 +60,16 @@ async function runApiTests() {
   const admin = await login('admin@example.com', 'Admin123!');
   const staff = await login('staff@example.com', 'Staff123!');
   const chef = await login('chef@example.com', 'Chef123!');
+
+  const managerDashboard = await request('/admin/manager-dashboard', { token: admin });
+  assert(managerDashboard.response.status === 200, 'Admin should fetch manager dashboard metrics');
+  assertManagerDashboardShape(managerDashboard.body);
+  assert(!('summary' in managerDashboard.body), 'Manager dashboard should not return AI narrative text');
+  assert(!('source' in managerDashboard.body), 'Manager dashboard should not report AI generation source');
+  const staffDashboard = await request('/admin/manager-dashboard', { token: staff });
+  assert(staffDashboard.response.status === 403, 'Staff should not access manager dashboard metrics');
+  const chefDashboard = await request('/admin/manager-dashboard', { token: chef });
+  assert(chefDashboard.response.status === 403, 'Chef should not access manager dashboard metrics');
 
   const { response: menuResponse, body: menu } = await request('/menu-items');
   assert(menuResponse.status === 200 && menu.length > 0, 'Public menu should load');
@@ -809,6 +822,7 @@ async function runApiTests() {
       'legacy quantity checkout',
       'active order filtering',
       'admin history',
+      'admin manager dashboard',
       'table cleaning',
       'sold-out ordering guard',
       'bundle sold-out dependency guard',
@@ -825,6 +839,8 @@ async function assertSecurityControls() {
   const health = await request('/health');
   assert(health.response.headers.get('x-content-type-options') === 'nosniff', 'Helmet should set security headers');
   assert(Boolean(health.response.headers.get('x-request-id')), 'API responses should include a request id');
+  assert(['connected', 'disabled', 'unavailable'].includes(health.body.redis), 'Health check should report Redis status');
+  assert(['configured', 'rules-fallback'].includes(health.body.aiSummary), 'Health check should report AI summary mode');
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const failed = await request('/auth/login', {
@@ -1073,6 +1089,17 @@ function findOrderItem(order, itemId) {
   const item = order.items.find((candidate) => candidate.id === itemId);
   assert(item, `Expected order item ${itemId} to exist`);
   return item;
+}
+
+function assertManagerDashboardShape(body) {
+  assert(typeof body.generatedAt === 'string', 'Manager dashboard should include generatedAt');
+  assert(typeof body.metrics === 'object' && body.metrics, 'Manager dashboard should include metrics');
+  assert(typeof body.metrics.orderCount === 'number', 'Manager dashboard metrics should include orderCount');
+  assert(typeof body.metrics.activeOrderCount === 'number', 'Manager dashboard metrics should include activeOrderCount');
+  assert(typeof body.metrics.paidRevenueCents === 'number', 'Manager dashboard metrics should include paidRevenueCents');
+  assert(Array.isArray(body.topItems), 'Manager dashboard should include topItems');
+  assert(Array.isArray(body.statusCounts), 'Manager dashboard should include statusCounts');
+  assert(Array.isArray(body.kitchenQueue), 'Manager dashboard should include kitchenQueue');
 }
 
 function assert(condition, message) {

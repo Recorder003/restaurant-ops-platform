@@ -854,6 +854,22 @@ textarea {
   margin: 0;
 }
 
+.ai-summary-source-note {
+  color: #51606d;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.ai-stale-notice {
+  background: #fff3cd;
+  border: 1px solid #f3d57a;
+  border-radius: 8px;
+  color: #7a5600;
+  font-weight: 700;
+  margin: 14px 0 0;
+  padding: 12px 14px;
+}
+
 .ai-summary-metrics,
 .ai-summary-columns {
   display: grid;
@@ -897,6 +913,127 @@ textarea {
   color: #1f2933;
   float: right;
   margin-left: 10px;
+}
+
+.manager-dashboard-panel .panel-heading {
+  gap: 16px;
+}
+
+.manager-dashboard-panel .panel-heading p,
+.dashboard-timestamp,
+.dashboard-card p {
+  color: #6b7280;
+  margin: 4px 0 0;
+}
+
+.manager-dashboard-content {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.dashboard-status-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dashboard-status-badge,
+.dashboard-refreshing {
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 900;
+  padding: 6px 10px;
+}
+
+.dashboard-status-badge {
+  background: #d9f2e8;
+  color: #17724b;
+}
+
+.dashboard-refreshing {
+  background: #e6f2ff;
+  color: #155a8a;
+}
+
+.dashboard-timestamp {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.dashboard-metrics {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dashboard-metric {
+  min-height: 86px;
+}
+
+.dashboard-columns {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dashboard-card {
+  background: #faf7f2;
+  border: 1px solid #e8dfd3;
+  border-radius: 8px;
+  min-width: 0;
+  padding: 14px;
+}
+
+.dashboard-card h3 {
+  font-size: 1rem;
+  margin: 0 0 12px;
+}
+
+.dashboard-bar-list,
+.dashboard-item-list {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dashboard-bar-label,
+.dashboard-item-list li {
+  align-items: center;
+  color: #51606d;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  line-height: 1.35;
+}
+
+.dashboard-bar-label span,
+.dashboard-item-list span {
+  min-width: 0;
+}
+
+.dashboard-bar-label strong,
+.dashboard-item-list strong {
+  color: #1f2933;
+  flex: 0 0 auto;
+}
+
+.dashboard-bar-track {
+  background: #ece6dc;
+  border-radius: 999px;
+  height: 8px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.dashboard-bar-track span {
+  background: #2f5d5b;
+  border-radius: inherit;
+  display: block;
+  height: 100%;
 }
 
 .staff-form,

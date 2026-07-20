@@ -30,12 +30,12 @@ router.post('/login', loginRateLimit, async (req, res, next) => {
     const user = rows[0];
 
     if (!user || !user.is_active || !(await verifyPassword(parsed.data.password, user.password_hash))) {
-      recordFailedLogin(req);
+      await recordFailedLogin(req);
       res.status(401).json({ message: 'Invalid email or password' });
       return;
     }
 
-    recordSuccessfulLogin(req);
+    await recordSuccessfulLogin(req);
     const safeUser = mapUser(user);
 
     res.json({

@@ -25,11 +25,12 @@ The app currently includes:
 - Item-level kitchen workflow for chefs, with order status automatically summarized from dish progress
 - Menu, table, employee, order history, checkout, receipt, and sold-out management
 - PostgreSQL-backed persistence with database migrations
+- Redis-backed login rate limiting plus menu and bundle caching with cache invalidation
 - Realtime order, table, and menu refresh using an authenticated event stream
 - Security headers, request size limits, and login failure rate limiting
 - Structured request logs with request id tracing
 - Frontend session expiry handling, request reference errors, and duplicate-submit protection
-- API integration tests, browser E2E tests, and GitHub Actions CI
+- API integration tests, browser E2E tests, Redis-aware performance benchmarks, and GitHub Actions CI
 
 ## Recent Engineering Improvements
 
@@ -42,7 +43,9 @@ Recent quality improvements include:
 - Broke the order-entry workflow into tested staff wizard steps, admin form sections, and menu picker components
 - Added component-level tests for workflow steps, menu selection, admin order fields, workspace sections, auth screens, modals, and order cards
 - Improved order item row layout stability so status updates do not move controls around during staff and chef workflows
-- Increased client test coverage to 31 test files and 155 passing component/unit tests
+- Added Redis-backed login rate limiting and menu caching with environment-scoped cache keys
+- Benchmarked Redis cache hits against cold PostgreSQL-backed menu reads, reducing repeated menu p95 latency by 50.5% and repeated bundle p95 latency by 61.4% locally
+- Increased client test coverage to 35 test files and 164 passing component/unit tests
 
 ## Why This Project
 
@@ -128,6 +131,7 @@ Admins can manage menu items, staff roles, restaurant settings, and view order h
 
 - PostgreSQL
 - SQL schema and migration scripts
+- Redis for login rate limiting and read-through menu caching
 
 ### Deployment
 
@@ -261,7 +265,13 @@ The test database is reset by the test command and does not affect the normal lo
 
 The E2E command uses a separate database named `restaurant_orders_e2e`, starts the API on port `4200`, starts the Vite client on port `5175`, and drives a real browser through the staff order flow, chef kitchen flow, checkout, and receipt preview.
 
-The performance command uses a separate database named `restaurant_orders_perf`, starts the API on port `4300`, and reports local avg/p50/p95/max response times for health, menu, login, order listing, filtered order listing, and deep pagination scenarios.
+The performance command uses a separate database named `restaurant_orders_perf`, starts the API on port `4300`, and reports local avg/p50/p95/max response times for health, login, order listing, filtered order listing, deep pagination, and Redis-backed menu cache scenarios.
+
+Recent local Redis cache benchmark results:
+
+- `GET /menu-items`: warm Redis cache reduced p95 latency from `4.06 ms` to `2.01 ms` (`50.5%` reduction)
+- `GET /menu-items/bundles`: warm Redis cache reduced p95 latency from `3.89 ms` to `1.50 ms` (`61.4%` reduction)
+- `GET /orders` with `10000` synthetic orders stayed around `8-13 ms` p95 across common listing, filter, and deep pagination scenarios
 
 By default it benchmarks `500`, `5000`, and `10000` synthetic orders. You can override that with:
 
